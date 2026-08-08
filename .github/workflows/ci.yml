@@ -41,11 +41,11 @@ jobs:
       - name: Validar workflow weekend
         run: |
           python -c "
-          import yaml
           from pathlib import Path
-          wf = yaml.safe_load(Path('.github/workflows/weekend-saturday.yml').read_text())
-          assert wf['on']['schedule'][0]['cron'] == '0 10 * * 6'
-          assert 'weekend-report' in wf['jobs']
+          raw = Path('.github/workflows/weekend-saturday.yml').read_text(encoding='utf-8')
+          assert '0 10 * * 6' in raw, 'cron sabado 7h BRT ausente'
+          assert 'weekend-report' in raw
+          assert 'upload_weekend_folder' in raw
           print('workflow YAML OK')
           "
 
