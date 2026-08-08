@@ -214,10 +214,19 @@ class LiveMonitor:
             best_action = "—"
             best_market = ""
             confidence = 0.0
+            kelly_quarter = 0.0
+            stake_back_pct = 0.0
+            stake_lay_pct = 0.0
             prob_h = prob_d = prob_a = None
             for r in recs:
                 if r.get("prob_home"):
                     prob_h, prob_d, prob_a = r["prob_home"], r["prob_draw"], r["prob_away"]
+                sb = float(r.get("stake_back_pct") or r.get("pct_banca") or 0)
+                sl = float(r.get("stake_lay_pct") or 0)
+                kq = float(r.get("kelly_quarto") or 0)
+                stake_back_pct = max(stake_back_pct, sb)
+                stake_lay_pct = max(stake_lay_pct, sl)
+                kelly_quarter = max(kelly_quarter, kq)
                 if r.get("action") == "ENTER":
                     best_action = "ENTER"
                     best_market = r.get("market_label", r.get("market", ""))
@@ -245,6 +254,9 @@ class LiveMonitor:
                 best_action=best_action,
                 best_market=best_market,
                 confidence=confidence,
+                kelly_quarter=kelly_quarter,
+                stake_back_pct=stake_back_pct,
+                stake_lay_pct=stake_lay_pct,
             )
             states.append(state)
 

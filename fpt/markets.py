@@ -55,6 +55,23 @@ TRADING_MARKETS = ["home_win_ft", "draw_ft", "away_win_ft"]
 # Estrategia: entrada pre-jogo, saida no intervalo (HT)
 PREMATCH_HT_EXIT_MARKETS = TRADING_MARKETS  # home_win_ft, draw_ft, away_win_ft
 
+# Stakes (% banca) apenas nestas linhas (pre-jogo / saida HT):
+# - LAY mandante ou visitante FT
+# - BACK empate FT
+# - BACK under gols (HT e FT)
+PRO_TEMPO_STAKE_LAY = frozenset({"home_win_ft", "away_win_ft"})
+PRO_TEMPO_STAKE_BACK = frozenset({"draw_ft"}) | {
+    m.id for m in JOGOS_DIA_MARKETS if m.id.startswith("under")
+}
+
+
+def stake_sides_allowed(market_id: str) -> tuple[bool, bool]:
+    """Retorna (permite_stake_back, permite_stake_lay) para estrategias pre-jogo/HT."""
+    return (
+        market_id in PRO_TEMPO_STAKE_BACK,
+        market_id in PRO_TEMPO_STAKE_LAY,
+    )
+
 
 def available_markets_for_row(row) -> list[MarketDef]:
     """Todos os mercados FPT com odd disponivel neste jogo."""

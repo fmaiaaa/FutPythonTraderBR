@@ -3,12 +3,12 @@
 trading:
   phi: 1.08                    # limiar de entrada: odd_min = odd_justa × phi
   kelly_fraction: 0.25         # ¼ Kelly
-  max_risk_per_trade: 0.01     # teto 1% da banca por operação
+  max_risk_per_trade: 0.03     # teto 3% da banca por operação
   commission: 0.05             # comissão Betfair típica (5%)
   min_confidence: 40           # score mínimo (0-100) para entrar
   bankroll: 1000.0             # banca inicial (R$ ou £ — unidade livre)
   ignore_market_odds_filter: true   # não filtrar por odd atual — só referência
-  reference_mode: true         # exibir todas as linhas (INFO), não ENTER/SKIP
+  reference_mode: true         # exibir todas as linhas (INFO); stake so em lay time / empate / under
 
 markets:
   # mercados suportados na v1 (back FT → saída HT)

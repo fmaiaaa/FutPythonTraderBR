@@ -62,7 +62,7 @@ def kelly_ht_trade(
     capped_by = None
     if k_quarter > max_risk:
         k_quarter = max_risk
-        capped_by = "max_risk_1pct"
+        capped_by = "max_risk_3pct"
 
     stake = round(bankroll * k_quarter, 2)
     return StakeDecision(
@@ -92,7 +92,7 @@ def kelly_simple(
     capped_by = None
     if k_quarter > max_risk:
         k_quarter = max_risk
-        capped_by = "max_risk_1pct"
+        capped_by = "max_risk_3pct"
     stake = round(bankroll * k_quarter, 2)
     return StakeDecision(
         kelly_full=round(k_full, 4),
@@ -129,7 +129,7 @@ def kelly_lay(
     max_stake_pct = max_risk / (L - 1)
     if k_quarter > max_stake_pct:
         k_quarter = max_stake_pct
-        capped_by = "max_liability_1pct"
+        capped_by = "max_liability_3pct"
 
     stake = round(bankroll * k_quarter, 2)
     return StakeDecision(
@@ -153,7 +153,7 @@ def compute_back_lay_stakes(
     exit_odd: float | None = None,
     uses_ht: bool = False,
 ) -> tuple[StakeDecision, StakeDecision]:
-    """Calcula stake % Kelly para back e lay separadamente."""
+    """Calcula stake % Kelly para back e lay (odds = back mín / lay máx)."""
     back_price = back_odd if back_odd and back_odd > 1.01 else None
     lay_price = lay_odd if lay_odd and lay_odd > 1.01 else None
 
@@ -169,6 +169,26 @@ def compute_back_lay_stakes(
     else:
         stake_lay = StakeDecision(0, 0, 0, 0, confidence, None)
 
+    return stake_back, stake_lay
+
+
+def empty_stake(confidence: float = 70.0) -> StakeDecision:
+    return StakeDecision(0, 0, 0, 0, confidence, None)
+
+
+def apply_pro_tempo_stake_policy(
+    market_id: str,
+    stake_back: StakeDecision,
+    stake_lay: StakeDecision,
+) -> tuple[StakeDecision, StakeDecision]:
+    """Zera stakes fora de: lay time FT, back empate FT, back under gols."""
+    from ..markets import stake_sides_allowed
+
+    allow_back, allow_lay = stake_sides_allowed(market_id)
+    if not allow_back:
+        stake_back = empty_stake(stake_back.confidence)
+    if not allow_lay:
+        stake_lay = empty_stake(stake_lay.confidence)
     return stake_back, stake_lay
 
 

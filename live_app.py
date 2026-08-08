@@ -35,6 +35,7 @@ from fpt.live.models import LiveMatchState
 from fpt.live.monitor import LiveMonitor
 from fpt.live.reports import find_weekend_reports
 from fpt.live.executor import BetfairExecutor, load_recent_executions
+from fpt.pipeline import load_merged
 from fpt.report.chart_equity import decompose_equity_time
 
 BR = ZoneInfo("America/Sao_Paulo")
@@ -390,13 +391,14 @@ def _page_monitor(cfg, auto, refresh_sec, filter_status, filter_league, only_ale
     if only_alerts:
         states = [s for s in states if s.alerts]
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
     c1.metric("Jogos", len(states))
     c2.metric("Ao vivo", sum(1 for s in states if s.in_play))
     c3.metric("Alertas", sum(len(s.alerts) for s in states))
     c4.metric("Entradas", sum(1 for s in states if s.best_action == "ENTER"))
-    c5.metric("Odds @", global_updated)
-    c6.metric("Próx. tick", f"{refresh_sec}s")
+    c5.metric("Max ¼ Kelly", f"{max((s.kelly_quarter for s in states), default=0):.2%}")
+    c6.metric("Odds @", global_updated)
+    c7.metric("Próx. tick", f"{refresh_sec}s")
 
     all_alerts = [a for s in states for a in s.alerts]
     exec_cfg = load_live_config().get("execution", {})
@@ -457,6 +459,9 @@ def _page_monitor(cfg, auto, refresh_sec, filter_status, filter_league, only_ale
                 "Modelo H/E/A": (
                     f"{s.prob_home:.0%}/{s.prob_draw:.0%}/{s.prob_away:.0%}" if s.prob_home else "—"
                 ),
+                "¼ Kelly": f"{s.kelly_quarter:.2%}" if s.kelly_quarter else "—",
+                "Stake B%": f"{s.stake_back_pct:.2%}" if s.stake_back_pct else "—",
+                "Stake L%": f"{s.stake_lay_pct:.2%}" if s.stake_lay_pct else "—",
                 "Ação": s.best_action,
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
@@ -470,10 +475,13 @@ def _page_monitor(cfg, auto, refresh_sec, filter_status, filter_league, only_ale
                             "Mercado": r.get("market_label"),
                             "Ação": r.get("action"),
                             "P": f"{r.get('probabilidade_estimada', 0):.1%}",
-                            "Back": r.get("odd_back"),
-                            "Lay": r.get("odd_lay"),
-                            "Mín": r.get("odd_minima_entrada"),
+                            "Back mkt": r.get("odd_back"),
+                            "Lay mkt": r.get("odd_lay"),
+                            "Bk mín": r.get("odd_minima_entrada"),
+                            "Ly máx": r.get("lay_max"),
                             "Edge": r.get("edge_pp"),
+                            "Kelly cheio": f"{r.get('kelly_cheio', 0):.2%}",
+                            "¼ Kelly": f"{r.get('kelly_quarto', 0):.2%}",
                             "Stake Back %": f"{r.get('stake_back_pct', r.get('pct_banca', 0)):.2%}",
                             "Stake Lay %": f"{r.get('stake_lay_pct', 0):.2%}",
                         }

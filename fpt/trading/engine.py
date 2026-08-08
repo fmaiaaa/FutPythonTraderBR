@@ -9,12 +9,12 @@ from ..calendar import list_market_odds
 from .config import load_config
 from .fair_odds import exchange_fair_odds, fair_odd, min_entry_odd
 from .ht_trading import estimate_ht_trade
-from .kelly import explain_zero_stake, kelly_ht_trade, compute_back_lay_stakes
+from .kelly import explain_zero_stake, kelly_ht_trade, compute_back_lay_stakes, apply_pro_tempo_stake_policy
 from .market_probs import p_ht_profit_proxy, probability_for_market
 from .market_sim import MarketOdds, MarketProvider, SimulatedMarket
 from .probabilities import estimate_match_probabilities
 from .recommendation import TradeRecommendation
-from ..markets import TRADING_MARKETS, available_markets_for_row, market_by_id
+from ..markets import TRADING_MARKETS, available_markets_for_row, market_by_id, stake_sides_allowed
 from ..models.calibration import dynamic_phi
 
 
@@ -85,28 +85,34 @@ def build_recommendation(
         home=pred.prob_home, draw=pred.prob_draw, away=pred.prob_away,
         lambda_home=1.4, lambda_away=1.1, sample_home=10, sample_away=10,
     )
-    ht = estimate_ht_trade(mp, entry_odd, market)
+    ht = estimate_ht_trade(mp, ex.back_min if market in TRADING_MARKETS else entry_odd, market)
     p_ht = pred.p_ht_profitable if pred.model_loaded else ht.p_profitable
 
     uses_ht = market in TRADING_MARKETS
-    odd_back = m_odd if m_odd and m_odd > 1.01 else ex.back_fair
-    odd_lay = market_odds.get_lay(market) if market_odds else None
-    if not odd_lay or odd_lay <= 1.01:
-        odd_lay = ex.lay_fair
+    # Kelly conservador: entrada back mín; lay stake no lay máx; saída HT pelo modelo @ back mín
+    odd_back_kelly = ex.back_min
+    odd_lay_kelly = ex.lay_max
 
     exit_odd = ht.expected_exit_odd if uses_ht else max(ex.lay_max, 1.02)
     stake_back, stake_lay = compute_back_lay_stakes(
-        p, odd_back, odd_lay, bankroll, pred.confidence,
+        p, odd_back_kelly, odd_lay_kelly, bankroll, pred.confidence,
         p_ht=p_ht if uses_ht else None,
         exit_odd=exit_odd if uses_ht else None,
         uses_ht=uses_ht,
     )
-    stake = stake_back
+    allow_back, allow_lay = stake_sides_allowed(market)
+    stake_back, stake_lay = apply_pro_tempo_stake_policy(market, stake_back, stake_lay)
+    stake = stake_back if allow_back else stake_lay
     lucro = ht.expected_profit_pct if uses_ht else round((p * entry_odd - 1) * 100, 2)
 
-    stake_motivo = explain_zero_stake(stake, p, p_ht, mo, uses_ht)
-    if stake_back.stake_pct <= 0 and stake_lay.stake_pct <= 0 and not stake_motivo:
-        stake_motivo = explain_zero_stake(stake_lay, 1 - p, p_ht, ex.lay_fair, False)
+    if not allow_back and not allow_lay:
+        stake_motivo = "Stake apenas: lay time FT, back empate FT ou under gols"
+    else:
+        stake_motivo = explain_zero_stake(stake_back if allow_back else stake_lay, p, p_ht, mo, uses_ht and allow_back)
+        if stake_back.stake_pct <= 0 and stake_lay.stake_pct <= 0 and not stake_motivo:
+            stake_motivo = explain_zero_stake(stake_lay, 1 - p, p_ht, ex.lay_fair, False) if allow_lay else stake_motivo
+
+    has_stake = stake_back.stake_pct > 0 or stake_lay.stake_pct > 0
 
     reasons = []
     action = "INFO" if reference_mode else "ENTER"
@@ -118,7 +124,7 @@ def build_recommendation(
         if pred.confidence < min_conf:
             reasons.append(f"confiança {pred.confidence:.0f} < {min_conf}")
             action = "SKIP"
-        if stake.stake_amount <= 0 and stake_lay.stake_amount <= 0:
+        if not has_stake:
             reasons.append(stake_motivo or "Kelly = 0")
             action = "SKIP"
         if p_ht < 0.48 and uses_ht:
@@ -148,7 +154,7 @@ def build_recommendation(
         pct_banca=stake_back.stake_pct,
         stake_back_pct=stake_back.stake_pct,
         stake_lay_pct=stake_lay.stake_pct,
-        stake_valor=stake_back.stake_amount,
+        stake_valor=stake_back.stake_amount if stake_back.stake_pct > 0 else stake_lay.stake_amount,
         confianca=pred.confidence,
         stake_motivo=stake_motivo,
         model_loaded=pred.model_loaded,
@@ -234,14 +240,19 @@ def build_market_reference(
         lucro = round((p_ht * (ex.back_min / exit_odd) - 1) * 100, 2)
         uses_ht = True
 
-    odd_back = m_odd if m_odd and m_odd > 1.01 else ex.back_fair
-    odd_lay = ex.lay_fair
+    odd_back_kelly = ex.back_min
+    odd_lay_kelly = ex.lay_max
     stake_back, stake_lay = compute_back_lay_stakes(
-        p, odd_back, odd_lay, bankroll, confidence,
+        p, odd_back_kelly, odd_lay_kelly, bankroll, confidence,
         p_ht=p_ht, exit_odd=exit_odd, uses_ht=uses_ht,
     )
-    stake = stake_back
-    stake_motivo = explain_zero_stake(stake, p, p_ht, ex.back_min, uses_ht)
+    allow_back, allow_lay = stake_sides_allowed(market)
+    stake_back, stake_lay = apply_pro_tempo_stake_policy(market, stake_back, stake_lay)
+    stake = stake_back if allow_back else stake_lay
+    if not allow_back and not allow_lay:
+        stake_motivo = "Stake apenas: lay time FT, back empate FT ou under gols"
+    else:
+        stake_motivo = explain_zero_stake(stake_back if allow_back else stake_lay, p, p_ht, ex.back_min, uses_ht and allow_back)
 
     prob_h, prob_d, prob_a = mp.home, mp.draw, mp.away
     if ml_probs:
@@ -267,7 +278,7 @@ def build_market_reference(
         pct_banca=stake_back.stake_pct,
         stake_back_pct=stake_back.stake_pct,
         stake_lay_pct=stake_lay.stake_pct,
-        stake_valor=stake_back.stake_amount,
+        stake_valor=stake_back.stake_amount if stake_back.stake_pct > 0 else stake_lay.stake_amount,
         confianca=confidence,
         stake_motivo=stake_motivo,
         model_loaded=ml_probs is not None,

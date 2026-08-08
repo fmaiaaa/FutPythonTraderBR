@@ -85,6 +85,9 @@ class LiveMatchState:
     best_action: str = "—"
     best_market: str = ""
     confidence: float = 0.0
+    kelly_quarter: float = 0.0
+    stake_back_pct: float = 0.0
+    stake_lay_pct: float = 0.0
 
     @property
     def score_display(self) -> str:
@@ -115,4 +118,7 @@ class LiveMatchState:
             "best_action": self.best_action,
             "best_market": self.best_market,
             "confidence": self.confidence,
+            "kelly_quarter": self.kelly_quarter,
+            "stake_back_pct": self.stake_back_pct,
+            "stake_lay_pct": self.stake_lay_pct,
         }

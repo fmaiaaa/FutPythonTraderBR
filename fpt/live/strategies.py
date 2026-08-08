@@ -103,17 +103,25 @@ def evaluate_match_strategies(
             )
 
         if strat.get("back_value", {}).get("enabled", True):
-            if rec.action == "ENTER":
+            enter_side = None
+            enter_stake = 0.0
+            if mkt == "draw_ft" and rec.stake_back_pct > 0:
+                enter_side, enter_stake = "BACK", rec.stake_back_pct
+            elif mkt in ("home_win_ft", "away_win_ft") and rec.stake_lay_pct > 0:
+                enter_side, enter_stake = "LAY", rec.stake_lay_pct
+            if rec.action == "ENTER" and enter_side:
                 alerts.append(_base_alert(
                     "ENTER", "high",
                     (
-                        f"ENTRADA {MARKET_LABELS[mkt]}: back {odd_back:.2f} >= min {rec.odd_minima_entrada:.2f} "
+                        f"ENTRADA {MARKET_LABELS[mkt]} ({enter_side}): "
+                        f"{'back' if enter_side == 'BACK' else 'lay'} "
+                        f"{(odd_back if enter_side == 'BACK' else odd_lay):.2f} "
                         f"| P={rec.probabilidade_estimada:.1%} edge={rec.edge_pp:+.1f}pp "
-                        f"stake back {rec.stake_back_pct:.2%} lay {rec.stake_lay_pct:.2%}"
+                        f"stake {enter_stake:.2%}"
                     ),
-                    side="BACK",
+                    side=enter_side,
                 ))
-            elif odd_back and odd_back >= rec.odd_minima_entrada * (1 - watch_pct):
+            elif odd_back and mkt == "draw_ft" and odd_back >= rec.odd_minima_entrada * (1 - watch_pct):
                 if rec.edge_pp is not None and rec.edge_pp >= min_edge * 0.5:
                     alerts.append(_base_alert(
                         "WATCH", "medium",
@@ -124,16 +132,17 @@ def evaluate_match_strategies(
                     ))
 
         if in_play and strat.get("lay_exit_ht", {}).get("enabled", True) and odd_lay:
-            ex_fair = exchange_fair_odds(rec.probabilidade_estimada, rec.phi_seguranca)
-            if odd_lay <= ex_fair.lay_max:
-                alerts.append(_base_alert(
-                    "HT_EXIT", "high" if in_play else "medium",
-                    (
-                        f"SAÍDA HT {MARKET_LABELS[mkt]}: lay {odd_lay:.2f} <= max {ex_fair.lay_max:.2f} "
-                        f"| placar {score} | stake lay {rec.stake_lay_pct:.2%}"
-                    ),
-                    side="LAY",
-                ))
+            if mkt in ("home_win_ft", "away_win_ft") and rec.stake_lay_pct > 0:
+                ex_fair = exchange_fair_odds(rec.probabilidade_estimada, rec.phi_seguranca)
+                if odd_lay <= ex_fair.lay_max:
+                    alerts.append(_base_alert(
+                        "HT_EXIT", "high" if in_play else "medium",
+                        (
+                            f"SAÍDA HT {MARKET_LABELS[mkt]}: lay {odd_lay:.2f} <= max {ex_fair.lay_max:.2f} "
+                            f"| placar {score} | stake lay {rec.stake_lay_pct:.2%}"
+                        ),
+                        side="LAY",
+                    ))
 
         if prev_odds and strat.get("steam_move", {}).get("enabled", True):
             prev = prev_odds.get(mkt)
