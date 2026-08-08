@@ -120,6 +120,11 @@ def download_incremental_weekly() -> dict[str, int]:
             print(f"ERRO {key}: {e}")
         time.sleep(0.6)
     _write_errors(errors)
+    if not stats:
+        raise RuntimeError(
+            "Nenhuma liga da watchlist foi baixada. "
+            + ("Erros: " + "; ".join(errors[:5]) if errors else "Verifique FPT_API_KEY e assinatura FPT.")
+        )
     return stats
 
 

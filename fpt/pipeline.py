@@ -12,12 +12,18 @@ from .leagues import BRAZIL_MALE_LEAGUES
 
 
 def load_merged() -> pd.DataFrame:
-    p = DATA / "merged" / "brazil_male_all.parquet"
-    if p.exists():
-        return pd.read_parquet(p)
-    csv = DATA / "merged" / "brazil_male_all.csv"
-    if csv.exists():
-        return pd.read_csv(csv, low_memory=False)
+    for p in (
+        DATA / "merged" / "brazil_male_all.parquet",
+        DATA / "merged" / "global_all.parquet",
+    ):
+        if p.exists():
+            return pd.read_parquet(p)
+    for csv in (
+        DATA / "merged" / "brazil_male_all.csv",
+        DATA / "merged" / "global_all.csv",
+    ):
+        if csv.exists():
+            return pd.read_csv(csv, low_memory=False)
     raise FileNotFoundError("Dataset não encontrado. Rode: python main.py download-all")
 
 

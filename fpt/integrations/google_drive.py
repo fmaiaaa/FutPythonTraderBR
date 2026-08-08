@@ -321,7 +321,129 @@ def upload_models_bundle(models_dir: Path | None = None) -> dict | None:
     return None
 
 
+MERGED_ZIP_NAME = "fpt-merged-latest.zip"
+MODELS_ZIP_NAME = "fpt-models-latest.zip"
+DRIVE_ASSETS_FOLDER = "models"
 
+
+def _find_folder_id(service, parent_id: str, name: str) -> str | None:
+    q = (
+        f"name='{name}' and '{parent_id}' in parents "
+        f"and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    )
+    res = service.files().list(
+        q=q, fields="files(id,name)", supportsAllDrives=True, includeItemsFromAllDrives=True,
+    ).execute()
+    files = res.get("files", [])
+    return files[0]["id"] if files else None
+
+
+def find_drive_asset(filename: str, subfolder: str = DRIVE_ASSETS_FOLDER) -> dict | None:
+    """Localiza zip de modelos/dados no Drive (OAuth ou SA)."""
+    service, _ = _build_drive_service()
+    if not service:
+        return None
+    root = get_root_folder_id(service)
+    if not root:
+        return None
+    folder_id = _find_folder_id(service, root, subfolder)
+    if not folder_id:
+        return None
+    q = f"name='{filename}' and '{folder_id}' in parents and trashed=false"
+    res = service.files().list(
+        q=q,
+        fields="files(id,name,webViewLink,modifiedTime)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+    ).execute()
+    files = res.get("files", [])
+    if not files:
+        return None
+    f = files[0]
+    return {
+        "file_id": f["id"],
+        "name": f.get("name", filename),
+        "web_view_link": f.get("webViewLink"),
+    }
+
+
+def _download_drive_file_bytes(file_id: str) -> bytes | None:
+    try:
+        from googleapiclient.http import MediaIoBaseDownload
+        from io import BytesIO
+
+        service, _ = _build_drive_service()
+        if not service:
+            return None
+        buf = BytesIO()
+        request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+        downloader = MediaIoBaseDownload(buf, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def download_drive_zip(file_id: str, extract_dir: Path) -> bool:
+    """Baixa zip do Drive e extrai para extract_dir."""
+    import zipfile
+    from io import BytesIO
+
+    raw = _download_drive_file_bytes(file_id)
+    if not raw:
+        return False
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(BytesIO(raw)) as zf:
+        zf.extractall(extract_dir)
+    return True
+
+
+def upload_merged_bundle(merged_dir: Path | None = None) -> dict | None:
+    """Envia zip merged (global + BR) para Drive/models/ — Streamlit Cloud."""
+    import zipfile
+    from io import BytesIO
+    from googleapiclient.http import MediaIoBaseUpload
+
+    merged_dir = merged_dir or (DATA / "merged")
+    candidates = [
+        merged_dir / "global_all.parquet",
+        merged_dir / "global_all.csv",
+        merged_dir / "brazil_male_all.parquet",
+        merged_dir / "brazil_male_all.csv",
+    ]
+    files = [p for p in candidates if p.exists()]
+    if not files:
+        return None
+
+    service, _ = _build_drive_service()
+    if not service:
+        return None
+    root = get_root_folder_id(service)
+    if not root:
+        return None
+
+    assets_folder = _find_or_create_folder(service, root, DRIVE_ASSETS_FOLDER)
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in files:
+            zf.write(p, p.name)
+    buf.seek(0)
+
+    media = MediaIoBaseUpload(buf, mimetype="application/zip", resumable=False)
+    q = f"name='{MERGED_ZIP_NAME}' and '{assets_folder}' in parents and trashed=false"
+    existing = service.files().list(q=q, fields="files(id)", supportsAllDrives=True).execute().get("files", [])
+    body = {"name": MERGED_ZIP_NAME, "parents": [assets_folder]}
+    if existing:
+        updated = service.files().update(
+            fileId=existing[0]["id"], media_body=media, fields="id,webViewLink", supportsAllDrives=True,
+        ).execute()
+        return {"file_id": updated["id"], "web_view_link": updated.get("webViewLink"), "name": MERGED_ZIP_NAME}
+    created = service.files().create(
+        body=body, media_body=media, fields="id,webViewLink", supportsAllDrives=True,
+    ).execute()
+    return {"file_id": created["id"], "web_view_link": created.get("webViewLink"), "name": MERGED_ZIP_NAME}
 
 
 def get_root_folder_id(service) -> str | None:

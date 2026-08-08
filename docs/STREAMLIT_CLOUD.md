@@ -23,7 +23,8 @@ streamlit_app.py
 | `[google].oauth_*` | Mesmos valores dos GitHub Secrets (Drive) |
 | `[google].drive_folder_id` | ID da pasta Drive |
 | `[betfair].*` | Credenciais + cert_pem/key_pem |
-| `[google].models_drive_file_id` | Opcional — após 1º run semanal no GitHub |
+| `[google].models_drive_file_id` | Opcional — auto-descobre `fpt-models-latest.zip` no Drive |
+| `[google].oauth_*` + `drive_folder_id` | Baixa `fpt-merged-latest.zip` e modelos do Drive (sem FPT API) |
 
 ## Fluxo de dados
 
@@ -31,14 +32,15 @@ streamlit_app.py
 |-------|------|
 | Rotina semanal (PDFs) | GitHub Actions sábado 07:00 → Google Drive |
 | Modelos ML | `models/fpt-models-latest.zip` no Drive |
+| Dados merged | `models/fpt-merged-latest.zip` no Drive |
 | Live / odds | Streamlit Cloud (memória da sessão) |
 | PC local | **Não persiste** ticks, alertas nem relatórios |
 
 ## Primeira execução na nuvem
 
-1. Rode **Relatorio Semanal Sabado** no GitHub Actions (gera modelos + zip no Drive)
-2. Copie `models_drive_file_id` do zip no Drive para Secrets (opcional, acelera boot)
-3. Sem isso, o app baixa dados FPT e treina na 1ª visita (~5–10 min)
+1. Configure Secrets `[google]` (mesmos do GitHub) **ou** `FPT_API_KEY`
+2. Rode **Relatorio Semanal Sabado** no GitHub Actions (gera PDFs + zips no Drive)
+3. Recarregue o app Streamlit — boot baixa merged + modelos do Drive (~1 min)
 
 ## Local (opcional, só dev)
 
