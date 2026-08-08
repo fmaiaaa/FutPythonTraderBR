@@ -9,6 +9,7 @@ on:
 env:
   PYTHONUNBUFFERED: "1"
   TZ: America/Sao_Paulo
+  FPT_API_KEY: ${{ secrets.FPT_API_KEY }}
 
 jobs:
   weekend-report:
@@ -51,6 +52,10 @@ jobs:
           DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: |
           mkdir -p credentials
+          if [ -z "$FPT_KEY" ]; then
+            echo "::error::FPT_API_KEY nao configurado nos GitHub Secrets"
+            exit 1
+          fi
           cat > .env <<EOF
           FPT_API_KEY=${FPT_KEY}
           THE_ODDS_API_KEY=${ODDS_KEY}

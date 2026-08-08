@@ -4,10 +4,10 @@ set -euo pipefail
 
 : "${GOOGLE_DRIVE_FOLDER_ID:?GOOGLE_DRIVE_FOLDER_ID ausente}"
 
-cat > .env <<EOF
-GOOGLE_DRIVE_FOLDER=FutPythonTrader-Semanal
-GOOGLE_DRIVE_FOLDER_ID=${GOOGLE_DRIVE_FOLDER_ID}
-EOF
+{
+  echo "GOOGLE_DRIVE_FOLDER=FutPythonTrader-Semanal"
+  echo "GOOGLE_DRIVE_FOLDER_ID=${GOOGLE_DRIVE_FOLDER_ID}"
+} >> .env
 
 if [ -n "${GOOGLE_OAUTH_REFRESH_TOKEN:-}" ] && [ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" ] && [ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]; then
   {
