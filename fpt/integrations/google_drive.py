@@ -113,35 +113,54 @@ def _load_service_account_info() -> dict | None:
     return None
 
 
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
+
+def _load_oauth_credentials():
+    """OAuth com refresh token — recomendado para Gmail pessoal (SA nova nao tem quota)."""
+    refresh = os.environ.get("GOOGLE_OAUTH_REFRESH_TOKEN", "") or _load_env_var("GOOGLE_OAUTH_REFRESH_TOKEN")
+    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "") or _load_env_var("GOOGLE_OAUTH_CLIENT_ID")
+    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "") or _load_env_var("GOOGLE_OAUTH_CLIENT_SECRET")
+    if not (refresh and client_id and client_secret):
+        return None
+    try:
+        from google.oauth2.credentials import Credentials
+    except ImportError:
+        return None
+    return Credentials(
+        token=None,
+        refresh_token=refresh,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=DRIVE_SCOPES,
+    )
 
 
 def _build_drive_service():
+    try:
+        from googleapiclient.discovery import build
+    except ImportError:
+        print("pip install google-api-python-client google-auth")
+        return None, None
+
+    oauth_creds = _load_oauth_credentials()
+    if oauth_creds is not None:
+        service = build("drive", "v3", credentials=oauth_creds, cache_discovery=False)
+        return service, {"auth": "oauth", "client_email": "oauth-user"}
 
     info = _load_service_account_info()
-
     if not info:
-
         return None, None
 
     try:
-
         from google.oauth2 import service_account
-
-        from googleapiclient.discovery import build
-
     except ImportError:
-
         print("pip install google-api-python-client google-auth")
-
         return None, None
 
-    scopes = ["https://www.googleapis.com/auth/drive.file"]
-
-    creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
-
+    creds = service_account.Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
     service = build("drive", "v3", credentials=creds, cache_discovery=False)
-
     return service, info
 
 
@@ -363,14 +382,16 @@ def upload_file_detailed(
 
         email = info.get("client_email", "service-account")
 
-        if "storageQuotaExceeded" in err or "403" in err:
-
+        if "storageQuotaExceeded" in err or "do not have storage quota" in err.lower():
             print(
-
-                f"Google Drive: falha 403 — compartilhe a pasta FutPythonTrader-Semanal "
-
-                f"com {email} como Editor e use GOOGLE_DRIVE_FOLDER_ID=<id_da_pasta>"
-
+                "Google Drive: falha 403 — Service Accounts criadas apos abr/2025 nao tem quota. "
+                "Use OAuth (GOOGLE_OAUTH_*) ou Google Workspace Shared Drive. "
+                "Veja docs/GOOGLE_DRIVE_SETUP.md"
+            )
+        elif "403" in err:
+            print(
+                f"Google Drive: falha 403 — compartilhe a pasta com {email} como Editor "
+                "ou configure OAuth (GOOGLE_OAUTH_REFRESH_TOKEN)."
             )
 
         else:

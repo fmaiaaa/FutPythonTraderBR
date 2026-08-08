@@ -1,17 +1,48 @@
-# Google Drive — Service Account (obrigatório para CI)
+# Google Drive — OAuth (Gmail pessoal) ou Service Account
 
-Service Accounts **não têm quota de armazenamento**. Por isso os uploads falham com **403** se a pasta não for compartilhada.
+Desde **abr/2025**, Service Accounts **novas** não têm quota de armazenamento e **não conseguem fazer upload** em pastas do Meu Drive pessoal — mesmo compartilhadas. O compartilhamento continua necessário para a SA **ler** a pasta, mas o upload exige **OAuth** (recomendado) ou **Google Workspace Shared Drive**.
 
-## Passo a passo
+## Opção A — OAuth (recomendado para @gmail.com)
 
-1. [Google Cloud Console](https://console.cloud.google.com/) → projeto → **Google Drive API** ativada
-2. **IAM → Service Accounts** → criar → baixar JSON
-3. No **Google Drive pessoal**, crie a pasta `FutPythonTrader-Semanal`
-4. Compartilhe a pasta com o e-mail da SA como **Editor**:
-   **`futpythontrader@futpythontraderbr.iam.gserviceaccount.com`**
-5. Copie o **ID da pasta** da URL: `https://drive.google.com/drive/folders/ESTE_ID`
+1. [Google Cloud Console](https://console.cloud.google.com/) → **APIs & Services → OAuth consent screen** (External) → adicionar escopo `drive`
+2. **Credentials → Create OAuth client ID → Desktop app**
+3. No `.env`:
 
-   Sua pasta local (`.env`): `1Qs1vLDtyf1k61MdgqVcbvTtKr43KGeJn`
+```env
+GOOGLE_OAUTH_CLIENT_ID=...
+GOOGLE_OAUTH_CLIENT_SECRET=...
+GOOGLE_OAUTH_REFRESH_TOKEN=...
+GOOGLE_DRIVE_FOLDER_ID=1Qs1vLDtyf1k61MdgqVcbvTtKr43KGeJn
+```
+
+4. Gerar refresh token (uma vez):
+
+```powershell
+python scripts/get_google_oauth_token.py
+```
+
+5. GitHub Secrets (Settings → Secrets → Actions):
+
+| Secret | Valor |
+|--------|-------|
+| `GOOGLE_OAUTH_CLIENT_ID` | do JSON OAuth |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | do JSON OAuth |
+| `GOOGLE_OAUTH_REFRESH_TOKEN` | gerado uma vez (script abaixo) |
+| `GOOGLE_DRIVE_FOLDER_ID` | `1Qs1vLDtyf1k61MdgqVcbvTtKr43KGeJn` |
+
+**Sem salvar no PC** — rode uma vez (abre navegador, grava só no GitHub):
+
+```powershell
+pip install google-auth-oauthlib
+python scripts/setup_google_oauth_github.py --client-json "C:\Users\kaleb\Downloads\client_secret_....json"
+```
+
+## Opção B — Service Account (Shared Drive / contas antigas)
+
+1. Google Cloud → **Google Drive API** ativada
+2. **IAM → Service Accounts** → JSON em `credentials/google-service-account.json`
+3. Compartilhe a pasta com **`futpythontrader@futpythontraderbr.iam.gserviceaccount.com`** como **Editor**
+4. Para Gmail pessoal: upload **só funciona** se a SA foi criada **antes de abr/2025**; caso contrário use OAuth acima
 
 ## Verificar antes do CI
 
