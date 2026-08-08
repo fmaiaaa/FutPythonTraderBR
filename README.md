@@ -51,7 +51,15 @@ python main.py dashboard         # painel Streamlit
 
 Odds 1X2, Over/Under, escanteios, xG, xGOT, posse, chutes, cartões, faltas — ver [documentação completa](https://futpythontrader.com.br/api-docs).
 
-## Trading quantitativo ML (pré-jogo → saída HT)
+## Operação Live (fim de semana)
+
+```bash
+streamlit run streamlit_app.py    # local
+python main.py live                 # atalho
+```
+
+**Streamlit Cloud:** main file = `streamlit_app.py` — veja [docs/STREAMLIT_CLOUD.md](docs/STREAMLIT_CLOUD.md)
+
 
 ### Pipeline completo
 
