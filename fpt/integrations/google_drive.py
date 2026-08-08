@@ -10,10 +10,23 @@ from ..client import ENV_PATH, DATA
 FOLDER_NAME = os.environ.get("GOOGLE_DRIVE_FOLDER", "FutPythonTrader-Semanal")
 
 
+def _load_env_var(name: str) -> str:
+    val = os.environ.get(name, "")
+    if val or not ENV_PATH.exists():
+        return val
+    for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith(f"{name}="):
+            return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return ""
+
+
 def _load_service_account_info() -> dict | None:
-    raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "") or _load_env_var("GOOGLE_SERVICE_ACCOUNT_JSON")
     if not raw:
-        cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+        cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "") or _load_env_var(
+            "GOOGLE_APPLICATION_CREDENTIALS"
+        )
         if cred_path and Path(cred_path).exists():
             return json.loads(Path(cred_path).read_text(encoding="utf-8"))
         if ENV_PATH.exists():
@@ -50,13 +63,29 @@ def upload_file(local_path: Path, folder_id: str | None = None) -> str | None:
     creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
     service = build("drive", "v3", credentials=creds, cache_discovery=False)
 
-    target_folder = folder_id or os.environ.get("GOOGLE_DRIVE_FOLDER_ID") or _ensure_folder(service)
+    target_folder = (
+        folder_id
+        or os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
+        or _load_env_var("GOOGLE_DRIVE_FOLDER_ID")
+        or _ensure_folder(service)
+    )
     meta = {"name": local_path.name, "parents": [target_folder]}
     media = MediaFileUpload(str(local_path), resumable=True)
-    created = service.files().create(body=meta, media_body=media, fields="id,webViewLink").execute()
-    link = created.get("webViewLink")
-    print(f"Google Drive: upload OK -> {link}")
-    return created.get("id")
+    try:
+        created = service.files().create(body=meta, media_body=media, fields="id,webViewLink").execute()
+        link = created.get("webViewLink")
+        print(f"Google Drive: upload OK -> {link}")
+        return created.get("id")
+    except Exception as ex:
+        if "storageQuotaExceeded" in str(ex) or "403" in str(ex):
+            email = info.get("client_email", "service-account")
+            print(
+                f"Google Drive: falha upload — compartilhe a pasta com {email} como Editor "
+                f"(ID pasta: {target_folder})"
+            )
+        else:
+            print(f"Google Drive: erro — {ex}")
+        return None
 
 
 def _ensure_folder(service) -> str:

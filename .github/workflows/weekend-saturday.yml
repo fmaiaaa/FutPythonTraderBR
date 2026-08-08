@@ -79,9 +79,16 @@ jobs:
           retention-days: 90
 
       - name: Upload PDF Google Drive
-        if: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
         run: |
-          PDF=$(ls data/weekend/*.pdf | tail -1)
+          if [ ! -f credentials/google-service-account.json ]; then
+            echo "Google Drive: credenciais ausentes — upload ignorado"
+            exit 0
+          fi
+          PDF=$(ls data/weekend/*.pdf 2>/dev/null | tail -1)
+          if [ -z "$PDF" ]; then
+            echo "Nenhum PDF encontrado"
+            exit 0
+          fi
           python -c "
           from pathlib import Path
           from fpt.integrations.google_drive import upload_file
