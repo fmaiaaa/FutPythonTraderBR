@@ -1,0 +1,54 @@
+# Configuração do sistema de trading pré-jogo → saída HT
+
+trading:
+  phi: 1.08                    # limiar de entrada: odd_min = odd_justa × phi
+  kelly_fraction: 0.25         # ¼ Kelly
+  max_risk_per_trade: 0.01     # teto 1% da banca por operação
+  commission: 0.05             # comissão Betfair típica (5%)
+  min_confidence: 40           # score mínimo (0-100) para entrar
+  bankroll: 1000.0             # banca inicial (R$ ou £ — unidade livre)
+
+markets:
+  # mercados suportados na v1 (back FT → saída HT)
+  - home_win_ft
+  - draw_ft
+  - away_win_ft
+
+ht_exit:
+  # multiplicadores estimados da odd de lay no HT vs odd de entrada
+  # (calibrar com dados Betfair in-play quando disponível)
+  home_leading: 0.62
+  draw: 0.90
+  home_losing: 1.38
+  # para seleção away (espelhado)
+  away_leading: 0.62
+  away_losing: 1.38
+
+model:
+  form_games: 10               # jogos recentes para forma
+  min_games_team: 8            # mínimo de jogos para confiar no modelo
+  ht_goal_share: 0.43          # fração esperada de gols no 1º tempo
+  home_advantage: 1.12         # fator mando de campo
+  min_train_samples: 100
+
+calibration:
+  base_phi: 1.03               # φ mínimo antes do ajuste por erro
+  ece_weight: 2.5              # sensibilidade ao erro de calibração
+  n_bins: 10
+
+context:
+  # pesos para ajuste log-odds (somam influência relativa)
+  form_weight: 0.15
+  motivation_weight: 0.10      # proxy rebaixamento/título
+  rest_weight: 0.05            # dias de descanso (quando disponível)
+  max_adjustment: 0.12         # teto ±12 p.p. na probabilidade
+
+simulation:
+  use_fpt_closing_odds: true
+  default_phi_grid: [1.03, 1.05, 1.08, 1.10, 1.12, 1.15]
+
+odds_api:
+  enabled: true
+  monthly_budget: 500
+  regions: "eu,uk"
+  prefer_bookmaker: pinnacle

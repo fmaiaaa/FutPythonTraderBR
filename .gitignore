@@ -1,0 +1,11 @@
+.env
+data/
+*.joblib
+credentials/*
+!credentials/.gitkeep
+google-service-account.json
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/

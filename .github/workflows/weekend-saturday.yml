@@ -1,0 +1,89 @@
+name: Relatorio Semanal Sabado
+
+on:
+  schedule:
+    # Sabado 07:00 BRT (UTC-3) = 10:00 UTC
+    - cron: "0 10 * * 6"
+  workflow_dispatch:
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  weekend-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Restaurar cache modelos/dados
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/models
+            data/merged
+            data/raw
+          key: fpt-data-${{ hashFiles('fpt/catalog.json') }}-${{ github.run_number }}
+          restore-keys: |
+            fpt-data-
+
+      - name: Configurar secrets
+        env:
+          FPT_KEY: ${{ secrets.FPT_API_KEY }}
+          ODDS_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+          GSA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          mkdir -p credentials
+          cat > .env <<EOF
+          FPT_API_KEY=${FPT_KEY}
+          THE_ODDS_API_KEY=${ODDS_KEY}
+          THE_ODDS_MONTHLY_BUDGET=500
+          GOOGLE_DRIVE_FOLDER=FutPythonTrader-Semanal
+          GOOGLE_DRIVE_FOLDER_ID=${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          LOG_LEVEL=INFO
+          EOF
+          if [ -n "$GSA_JSON" ]; then
+            echo "$GSA_JSON" > credentials/google-service-account.json
+            echo "GOOGLE_APPLICATION_CREDENTIALS=credentials/google-service-account.json" >> .env
+          fi
+
+      - name: Atualizar dados e treinar (se necessario)
+        run: |
+          if [ ! -f data/models/model_outcome.joblib ]; then
+            python main.py download-all
+            python main.py treinar
+          else
+            python main.py download-weekly
+          fi
+
+      - name: Rotina fim de semana (sabado + domingo)
+        run: python main.py fim-de-semana --no-train
+
+      - name: Upload artefatos GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-semanal-${{ github.run_id }}
+          path: |
+            data/weekend/*.pdf
+            data/weekend/*.csv
+            data/weekend/*.txt
+          retention-days: 90
+
+      - name: Upload PDF Google Drive
+        if: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
+        run: |
+          PDF=$(ls data/weekend/*.pdf | tail -1)
+          python -c "
+          from pathlib import Path
+          from fpt.integrations.google_drive import upload_file
+          upload_file(Path('$PDF'))
+          "
