@@ -10,10 +10,11 @@ import pandas as pd
 from .calendar import build_calendar, enrich_with_schedule, list_market_odds, weekend_window
 from .client import DATA
 from .downloader import download_incremental_weekly, merge_all
-from .markets import JOGOS_DIA_MARKETS, TRADING_MARKETS
+from .leagues import filter_watchlist
+from .markets import JOGOS_DIA_MARKETS, market_by_id
 from .models.train import train_models
 from .pipeline import load_merged
-from .trading.engine import build_recommendation
+from .trading.engine import build_market_reference, scan_match_all_markets
 from .trading.market_sim import MarketOdds
 from .trading.the_odds_api import enrich_calendar_with_odds_api, remaining_budget
 
@@ -56,13 +57,17 @@ def _f(v):
 def scan_weekend(
     cal: pd.DataFrame,
     hist: pd.DataFrame,
-    brazil_only: bool = True,
+    brazil_only: bool = False,
     bankroll: float | None = None,
 ) -> list[dict]:
     from .trading.config import load_config
 
     bankroll = bankroll or load_config()["trading"]["bankroll"]
-    sub = cal[cal["is_brazil"]] if brazil_only and "is_brazil" in cal.columns else cal
+    sub = cal if not cal.empty else cal
+    if not sub.empty and "watchlist_league" not in sub.columns:
+        sub = filter_watchlist(sub)
+    if brazil_only and "is_brazil" in sub.columns:
+        sub = sub[sub["is_brazil"]]
     entries = []
 
     for _, row in sub.iterrows():
@@ -70,23 +75,21 @@ def scan_weekend(
         if home in ("nan", "") or away in ("nan", ""):
             continue
         match_date = str(row["Date"])[:10]
-        odds = row_to_market_odds(row)
-        all_market_odds = list_market_odds(row)
+        recs = scan_match_all_markets(hist, home, away, row, match_date, bankroll)
 
-        for mkt in TRADING_MARKETS:
-            rec = build_recommendation(
-                hist, home, away, market=mkt, market_odds=odds,
-                match_date=match_date, bankroll=bankroll,
-            )
+        for rec in recs:
+            mdef = market_by_id(rec.market)
             entries.append({
                 "date": match_date,
                 "time": row.get("Time"),
-                "league": row.get("League"),
+                "league": row.get("watchlist_league") or row.get("League"),
                 "home": home,
                 "away": away,
-                "market": mkt,
+                "market": rec.market,
+                "market_label": mdef.label if mdef else rec.market,
                 "action": rec.action,
                 "prob": rec.probabilidade_estimada,
+                "p_lucro_ht": rec.p_lucro_ht,
                 "odd_justa": rec.odd_justa,
                 "phi": rec.phi_seguranca,
                 "odd_min": rec.odd_minima_entrada,
@@ -96,45 +99,57 @@ def scan_weekend(
                 "pct_banca": rec.pct_banca,
                 "stake": rec.stake_valor,
                 "confianca": rec.confianca,
-                "odds_source": odds.source,
+                "odds_source": "fpt_jogos_dia",
                 "schedule_notes": " | ".join(rec.schedule_notes),
-                "all_markets_count": len(all_market_odds),
             })
     return entries
 
 
 def format_weekend_report(entries: list[dict], meta: dict) -> str:
-    enters = [e for e in entries if e["action"] == "ENTER"]
     lines = [
         "=" * 70,
         f"RELATORIO FIM DE SEMANA — {meta.get('start')} a {meta.get('end')}",
-        f"Jogos no calendario: {meta.get('n_games')} | Entradas: {len(enters)}",
-        f"The Odds API creditos restantes: {meta.get('odds_api_remaining', 'N/A')}",
+        f"Jogos watchlist: {meta.get('n_games_watchlist', meta.get('n_games', 0))} | "
+        f"Linhas mercado: {len(entries)}",
+        "Estrategia: entrada pre-jogo (1X2 FT) -> saida no intervalo | odd justa, phi, min, stake",
         "=" * 70,
         "",
     ]
-    for e in sorted(enters, key=lambda x: -(x.get("edge_pp") or 0)):
+
+    by_match: dict[tuple, list] = {}
+    for e in entries:
+        key = (e["date"], e["home"], e["away"])
+        by_match.setdefault(key, []).append(e)
+
+    for key in sorted(by_match.keys()):
+        evs = by_match[key]
+        head = evs[0]
         lines += [
-            f"{e['date']} {e.get('time','')} | {e['league']}",
-            f"  {e['home']} x {e['away']}  [{e['market']}]",
-            f"  Prob={e['prob']:.1%} | Justa={e['odd_justa']:.2f} | phi={e['phi']:.3f} | Min={e['odd_min']:.2f}",
-            f"  Mercado={e['odd_mercado']} | Edge={e['edge_pp']}p.p. | LucroHT={e['lucro_est_pct']:+.2f}%",
-            f"  Stake={e['pct_banca']:.2%} (R$ {e['stake']:.2f}) | Conf={e['confianca']:.0f}",
-            f"  Fonte odds: {e['odds_source']}",
+            f"{head['date']} {head.get('time', '')} | {head['league']}",
+            f"  {head['home']} x {head['away']}",
+            f"  {'Mercado':<16} {'Prob':>6} {'P(HT)':>6} {'Justa':>6} {'phi':>5} {'Min':>6} {'Stake%':>7} {'R$':>7}",
         ]
-        if e.get("schedule_notes"):
-            lines.append(f"  Agenda: {e['schedule_notes']}")
+        for e in sorted(evs, key=lambda x: x.get("market", "")):
+            lines.append(
+                f"  {e.get('market_label', e['market']):<16} "
+                f"{e['prob']:>6.1%} {e.get('p_lucro_ht', 0):>6.1%} "
+                f"{e['odd_justa']:>6.2f} {e['phi']:>5.3f} "
+                f"{e['odd_min']:>6.2f} {e['pct_banca']:>6.2%} {e['stake']:>7.2f}"
+            )
+        if head.get("schedule_notes"):
+            lines.append(f"  Agenda: {head['schedule_notes']}")
         lines.append("")
-    if not enters:
-        lines.append("Nenhuma entrada recomendada neste fim de semana.")
+
+    if not entries:
+        lines.append("Nenhum jogo na watchlist neste fim de semana.")
     return "\n".join(lines)
 
 
 def run_weekend_pipeline(
     update_data: bool = True,
     retrain: bool = True,
-    use_odds_api: bool = True,
-    brazil_only: bool = True,
+    use_odds_api: bool = False,
+    brazil_only: bool = False,
 ) -> dict:
     start, end = weekend_window()
     meta = {"start": str(start), "end": str(end)}
@@ -149,20 +164,16 @@ def run_weekend_pipeline(
 
     print("\n[2/6] Montando calendario (hoje -> domingo)...")
     cal = build_calendar(start, end, brazil_only=False)
+    cal = filter_watchlist(cal)
     cal = enrich_with_schedule(cal, hist)
     meta["n_games"] = len(cal)
-    if brazil_only:
-        cal_br = cal[cal["is_brazil"]].copy() if "is_brazil" in cal.columns else cal
-    else:
-        cal_br = cal
-    meta["n_games_br"] = len(cal_br)
+    meta["n_games_watchlist"] = len(cal)
 
     if use_odds_api:
-        print("\n[3/6] The Odds API (prioridade fim de semana BR)...")
-        cal = enrich_calendar_with_odds_api(cal_br if brazil_only else cal, hist)
+        print("\n[3/6] The Odds API (prioridade fim de semana)...")
+        cal = enrich_calendar_with_odds_api(cal, hist)
         meta["odds_api_remaining"] = remaining_budget()
     else:
-        cal = cal_br
         print("\n[3/6] The Odds API desligada")
 
     if retrain:

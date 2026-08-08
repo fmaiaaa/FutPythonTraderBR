@@ -1,4 +1,4 @@
-"""PDF semanal — estimativas sabado e domingo."""
+"""PDF semanal — pre-jogo, saida HT."""
 from __future__ import annotations
 
 from collections import defaultdict
@@ -41,12 +41,12 @@ def generate_weekend_pdf(entries: list[dict], meta: dict, out_path: Path) -> Pat
     body = styles["Normal"]
 
     story = []
-    story.append(Paragraph("FutPythonTrader — Referencia Semanal (Watchlist)", title))
+    story.append(Paragraph("FutPythonTrader — Pre-jogo / Saida HT", title))
     story.append(Paragraph(
         f"Periodo: <b>{meta.get('start')}</b> a <b>{meta.get('end')}</b> | "
         f"Gerado: {datetime.now().strftime('%d/%m/%Y %H:%M')}<br/>"
         f"Jogos: {meta.get('n_games_watchlist', meta.get('n_games', 0))} | "
-        f"Linhas pre-jogo: {len(entries)} — odd justa, phi, minima e stake",
+        f"Mercados 1X2 FT (entrada pre-jogo, fechar no intervalo)",
         body,
     ))
     story.append(Spacer(1, 0.3 * cm))
@@ -65,11 +65,12 @@ def generate_weekend_pdf(entries: list[dict], meta: dict, out_path: Path) -> Pat
             h2,
         ))
 
-        rows = [["Mercado", "Prob", "Justa", "phi", "Min", "Odd ref", "Stake %", "R$"]]
+        rows = [["Mercado", "Prob FT", "P lucro HT", "Justa", "phi", "Min", "Odd ref", "Stake %", "R$"]]
         for e in sorted(evs, key=lambda x: x.get("market", "")):
             rows.append([
-                e.get("market_label", e.get("market", ""))[:22],
+                e.get("market_label", e.get("market", ""))[:18],
                 _fmt_pct(e.get("prob")),
+                _fmt_pct(e.get("p_lucro_ht")),
                 _fmt_f(e.get("odd_justa")),
                 _fmt_f(e.get("phi"), 3),
                 _fmt_f(e.get("odd_min")),
@@ -77,7 +78,10 @@ def generate_weekend_pdf(entries: list[dict], meta: dict, out_path: Path) -> Pat
                 _fmt_pct(e.get("pct_banca")),
                 _fmt_f(e.get("stake")),
             ])
-        t = Table(rows, colWidths=[4 * cm, 1.4 * cm, 1.2 * cm, 1.1 * cm, 1.2 * cm, 1.2 * cm, 1.4 * cm, 1.4 * cm])
+        t = Table(
+            rows,
+            colWidths=[3.2 * cm, 1.3 * cm, 1.4 * cm, 1.1 * cm, 1.0 * cm, 1.1 * cm, 1.1 * cm, 1.3 * cm, 1.2 * cm],
+        )
         t.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a5276")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -93,8 +97,8 @@ def generate_weekend_pdf(entries: list[dict], meta: dict, out_path: Path) -> Pat
 
     story.append(Spacer(1, 0.4 * cm))
     story.append(Paragraph(
-        "<i>Referencia pre-jogo. Compare odd minima com movimentacao do mercado. "
-        "Nao constitui recomendacao financeira.</i>",
+        "<i>Entrada pre-jogo no 1X2 FT; referencia de odd minima para fechar no intervalo. "
+        "Compare com movimentacao do mercado. Nao constitui recomendacao financeira.</i>",
         body,
     ))
     doc.build(story)

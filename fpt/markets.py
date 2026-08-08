@@ -52,18 +52,16 @@ JOGOS_DIA_MARKETS: list[MarketDef] = [
 # Mercados com modelo ML completo (v1 trading HT)
 TRADING_MARKETS = ["home_win_ft", "draw_ft", "away_win_ft"]
 
-# Mercados pré-jogo (FT) — exclui HT
-PREMATCH_MARKET_IDS = [
-    m.id for m in JOGOS_DIA_MARKETS
-    if m.group in ("1x2_ft", "ou_ft", "btts", "dc")
-]
+# Estrategia: entrada pre-jogo, saida no intervalo (HT)
+PREMATCH_HT_EXIT_MARKETS = TRADING_MARKETS  # home_win_ft, draw_ft, away_win_ft
 
 
-def prematch_markets_for_row(row) -> list[MarketDef]:
-    """Mercados pré-jogo disponíveis neste jogo (odd FPT > 1.01)."""
+def prematch_ht_markets_for_row(row) -> list[MarketDef]:
+    """1X2 FT com odd FPT disponivel — entrada pre-jogo, saida HT."""
     out: list[MarketDef] = []
-    for m in JOGOS_DIA_MARKETS:
-        if m.id not in PREMATCH_MARKET_IDS:
+    for mid in PREMATCH_HT_EXIT_MARKETS:
+        m = market_by_id(mid)
+        if not m:
             continue
         try:
             v = row.get(m.odd_col) if hasattr(row, "get") else None
@@ -72,6 +70,11 @@ def prematch_markets_for_row(row) -> list[MarketDef]:
         except (TypeError, ValueError):
             pass
     return out
+
+
+def prematch_markets_for_row(row) -> list[MarketDef]:
+    """Alias — estrategia HT exit."""
+    return prematch_ht_markets_for_row(row)
 
 
 def market_by_id(mid: str) -> MarketDef | None:

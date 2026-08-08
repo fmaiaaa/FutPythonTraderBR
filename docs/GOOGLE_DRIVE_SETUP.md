@@ -4,7 +4,8 @@
 2. Crie projeto → APIs → ative **Google Drive API**
 3. Credenciais → **Conta de serviço** → criar → baixar JSON
 4. No Google Drive, crie pasta `FutPythonTrader-Semanal`
-5. Compartilhe a pasta com o e-mail da service account (Editor)
+5. Compartilhe a pasta com o e-mail da service account como **Editor**:
+   `futpythontrader@futpythontraderbr.iam.gserviceaccount.com`
 
 ## Local (.env)
 

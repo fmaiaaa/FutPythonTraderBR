@@ -14,7 +14,7 @@ from .market_probs import probability_for_market
 from .market_sim import MarketOdds, MarketProvider, SimulatedMarket
 from .probabilities import estimate_match_probabilities
 from .recommendation import TradeRecommendation
-from ..markets import JOGOS_DIA_MARKETS, market_by_id, prematch_markets_for_row
+from ..markets import market_by_id, prematch_ht_markets_for_row
 from ..models.calibration import dynamic_phi
 
 
@@ -189,20 +189,22 @@ def scan_match_all_markets(
     match_date: str | None = None,
     bankroll: float | None = None,
 ) -> list[TradeRecommendation]:
-    """Gera referência para todos os mercados FPT de um jogo."""
+    """Referencia pre-jogo → saida HT: 1X2 FT (Mandante/Empate/Visitante)."""
     row_odds = list_market_odds(row) if hasattr(row, "get") else {}
     league_slug = row.get("League_Slug") if hasattr(row, "get") else None
-
-    pred = get_predictor().predict(df, home, away, "home_win_ft", match_date, league_slug)
-    ml_probs = {"home": pred.prob_home, "draw": pred.prob_draw, "away": pred.prob_away}
-    confidence = pred.confidence
+    odds = MarketOdds(
+        home=row_odds.get("home_win_ft"),
+        draw=row_odds.get("draw_ft"),
+        away=row_odds.get("away_win_ft"),
+        source="fpt_jogos_dia",
+    )
 
     recs = []
-    markets = prematch_markets_for_row(row)
-    for m in markets:
-        recs.append(build_market_reference(
-            df, home, away, m.id, row_odds, match_date, league_slug,
-            bankroll, ml_probs, confidence,
+    for m in prematch_ht_markets_for_row(row):
+        recs.append(build_recommendation(
+            df, home, away, market=m.id, market_odds=odds,
+            match_date=match_date, league_slug=league_slug,
+            bankroll=bankroll, reference_mode=True,
         ))
     return recs
 

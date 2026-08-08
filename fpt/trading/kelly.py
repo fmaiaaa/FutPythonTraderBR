@@ -77,5 +77,30 @@ def kelly_ht_trade(
     )
 
 
-def legacy_kelly_back(probability: float, odd: float) -> float:
-    return kelly_fraction(probability, odd - 1)
+def kelly_simple(
+    p: float,
+    entry_odd: float,
+    bankroll: float,
+    confidence: float = 70.0,
+) -> StakeDecision:
+    """Kelly clássico sobre odd de referência (odd mínima aceitável)."""
+    cfg = load_config()["trading"]
+    k_frac = cfg["kelly_fraction"]
+    max_risk = cfg["max_risk_per_trade"]
+
+    k_full = kelly_fraction(p, max(entry_odd - 1, 0.01))
+    conf_adj = max(0.3, min(1.0, confidence / 100))
+    k_quarter = k_full * k_frac * conf_adj
+    capped_by = None
+    if k_quarter > max_risk:
+        k_quarter = max_risk
+        capped_by = "max_risk_1pct"
+    stake = round(bankroll * k_quarter, 2)
+    return StakeDecision(
+        kelly_full=round(k_full, 4),
+        kelly_quarter=round(k_full * k_frac, 4),
+        stake_pct=round(k_quarter, 4),
+        stake_amount=stake,
+        confidence=confidence,
+        capped_by=capped_by,
+    )
