@@ -83,6 +83,7 @@ jobs:
             python main.py treinar
           else
             echo "Modelo em cache"
+          fi
 
       - name: Rotina fim de semana (sabado + domingo)
         run: python main.py fim-de-semana --no-train
