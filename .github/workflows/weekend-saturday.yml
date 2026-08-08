@@ -106,6 +106,9 @@ jobs:
             exit 1
           fi
 
+      - name: Verificar permissao Google Drive
+        run: python scripts/verify_drive_access.py
+
       - name: Upload Google Drive
         env:
           REPORT_DIR: ${{ steps.paths.outputs.report_dir }}

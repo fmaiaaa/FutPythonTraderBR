@@ -7,8 +7,19 @@ Service Accounts **não têm quota de armazenamento**. Por isso os uploads falha
 1. [Google Cloud Console](https://console.cloud.google.com/) → projeto → **Google Drive API** ativada
 2. **IAM → Service Accounts** → criar → baixar JSON
 3. No **Google Drive pessoal**, crie a pasta `FutPythonTrader-Semanal`
-4. Compartilhe a pasta com o e-mail da SA (ex: `futpythontrader@....iam.gserviceaccount.com`) como **Editor**
+4. Compartilhe a pasta com o e-mail da SA como **Editor**:
+   **`futpythontrader@futpythontraderbr.iam.gserviceaccount.com`**
 5. Copie o **ID da pasta** da URL: `https://drive.google.com/drive/folders/ESTE_ID`
+
+   Sua pasta local (`.env`): `1Qs1vLDtyf1k61MdgqVcbvTtKr43KGeJn`
+
+## Verificar antes do CI
+
+```powershell
+python scripts/verify_drive_access.py
+```
+
+Se retornar erro 403, a pasta **não está compartilhada** com a Service Account.
 
 ## `.env` local
 

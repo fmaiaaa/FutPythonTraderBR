@@ -219,6 +219,43 @@ def get_root_folder_id(service) -> str | None:
     return _ensure_folder(service)
 
 
+def verify_drive_folder_access() -> dict:
+    """Testa se a SA consegue escrever na pasta configurada."""
+    service, info = _build_drive_service()
+    if not service or not info:
+        return {"ok": False, "error": "credenciais_ausentes", "service_account": info.get("client_email") if info else None}
+
+    sa_email = info.get("client_email", "")
+    folder_id = get_root_folder_id(service)
+    if not folder_id:
+        return {"ok": False, "error": "folder_id_ausente", "service_account": sa_email}
+
+    out = {"ok": False, "folder_id": folder_id, "service_account": sa_email}
+    try:
+        meta = service.files().get(
+            fileId=folder_id,
+            fields="id,name,capabilities,mimeType",
+            supportsAllDrives=True,
+        ).execute()
+        caps = meta.get("capabilities") or {}
+        out["folder_name"] = meta.get("name")
+        out["can_add_children"] = caps.get("canAddChildren", False)
+        out["can_edit"] = caps.get("canEdit", False)
+        if not caps.get("canAddChildren") and not caps.get("canEdit"):
+            out["error"] = "sem_permissao_editor"
+            return out
+        out["ok"] = True
+        return out
+    except Exception as ex:
+        err = str(ex)
+        out["error"] = err[:300]
+        if "404" in err:
+            out["hint"] = "Pasta não encontrada — confira GOOGLE_DRIVE_FOLDER_ID"
+        elif "403" in err:
+            out["hint"] = f"Compartilhe a pasta com {sa_email} como Editor"
+        return out
+
+
 
 
 
