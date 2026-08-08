@@ -26,6 +26,9 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
+      - name: Preparar diretorios de dados
+        run: mkdir -p data/raw data/merged data/models data/weekend credentials
+
       - name: Restaurar cache modelos/dados
         uses: actions/cache@v4
         with:
@@ -44,7 +47,6 @@ jobs:
           GSA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: |
-          mkdir -p credentials
           cat > .env <<EOF
           FPT_API_KEY=${FPT_KEY}
           THE_ODDS_API_KEY=${ODDS_KEY}
@@ -57,20 +59,30 @@ jobs:
             echo "$GSA_JSON" > credentials/google-service-account.json
             echo "GOOGLE_APPLICATION_CREDENTIALS=credentials/google-service-account.json" >> .env
           fi
+          if [ -z "$GSA_JSON" ]; then
+            echo "::error::GOOGLE_SERVICE_ACCOUNT_JSON nao configurado nos Secrets"
+            exit 1
+          fi
           if [ -z "$DRIVE_FOLDER_ID" ]; then
-            echo "::warning::GOOGLE_DRIVE_FOLDER_ID nao configurado — upload Drive falhara (403)"
+            echo "::error::GOOGLE_DRIVE_FOLDER_ID nao configurado nos Secrets"
+            exit 1
           fi
 
       - name: Atualizar dados FPT
-        run: python main.py download-weekly
+        run: |
+          if [ -f data/merged/brazil_male_all.parquet ] || [ -f data/merged/brazil_male_all.csv ]; then
+            echo "Merged em cache — pulando download-weekly"
+          else
+            python main.py download-weekly || true
+            python -c "from fpt.downloader import merge_all; merge_all(); print('merge OK')"
+          fi
 
-      - name: Treinar modelos (se ausentes ou dados novos)
+      - name: Treinar modelos (se ausentes)
         run: |
           if [ ! -f data/models/model_outcome.joblib ]; then
             python main.py treinar
           else
-            echo "Modelo em cache — treino ignorado (use workflow_dispatch + retrain manual se necessario)"
-          fi
+            echo "Modelo em cache"
 
       - name: Rotina fim de semana (sabado + domingo)
         run: python main.py fim-de-semana --no-train
@@ -86,33 +98,19 @@ jobs:
           echo "report_dir=$REPORT_DIR" >> $GITHUB_OUTPUT
           echo "Pasta: $REPORT_DIR"
           ls -la "$REPORT_DIR"
-
-      - name: Upload Google Drive (todos PDFs + CSV + planilhas Betfair)
-        run: |
-          if [ ! -f credentials/google-service-account.json ]; then
-            echo "::warning::Google Drive: credenciais ausentes — upload ignorado"
-            exit 0
+          PDF_COUNT=$(find "$REPORT_DIR" -name '*.pdf' | wc -l)
+          echo "PDFs: $PDF_COUNT"
+          if [ "$PDF_COUNT" -eq 0 ]; then
+            echo "::error::Nenhum PDF gerado"
+            exit 1
           fi
-          SAT=$(basename "${{ steps.paths.outputs.report_dir }}")
-          python -c "
-          from pathlib import Path
-          from fpt.integrations.google_drive import upload_weekend_folder
-          report = Path('${{ steps.paths.outputs.report_dir }}')
-          manifest = upload_weekend_folder(report, '$SAT')
-          # Ticks Betfair recentes (se existirem)
-          ticks_root = Path('data/betfair/ticks')
-          if ticks_root.exists():
-              for xlsx in sorted(ticks_root.rglob('betfair_analise_*.xlsx'))[-3:]:
-                  import shutil
-                  dest = report / xlsx.name
-                  shutil.copy2(xlsx, dest)
-                  print('Anexo Betfair:', xlsx.name)
-              manifest2 = upload_weekend_folder(report, '$SAT')
-              manifest['uploaded'] = list({*(manifest.get('uploaded') or []), *(manifest2.get('uploaded') or [])})
-          if not manifest.get('uploaded'):
-              raise SystemExit('Nenhum arquivo enviado ao Drive — verifique GOOGLE_DRIVE_FOLDER_ID e permissao da SA')
-          print('Drive OK:', len(manifest['uploaded']), 'arquivos')
-          "
+
+      - name: Upload Google Drive
+        env:
+          REPORT_DIR: ${{ steps.paths.outputs.report_dir }}
+        run: |
+          SAT=$(basename "$REPORT_DIR")
+          python scripts/upload_weekend_drive.py --dir "$REPORT_DIR" --date "$SAT"
 
       - name: Upload artefatos GitHub
         uses: actions/upload-artifact@v4
@@ -130,5 +128,6 @@ jobs:
           echo "=== Relatorio gerado ==="
           find data/weekend -name "*.pdf" | head -20
           if [ -f "${{ steps.paths.outputs.report_dir }}/drive_links.json" ]; then
+            echo "=== drive_links.json ==="
             cat "${{ steps.paths.outputs.report_dir }}/drive_links.json"
           fi

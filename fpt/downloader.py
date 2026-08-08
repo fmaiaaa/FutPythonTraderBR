@@ -140,7 +140,7 @@ def merge_all(glob_country: str | None = None) -> pd.DataFrame:
         total = total.drop_duplicates(subset=["Match_ID"], keep="last")
     out_dir = DATA / "merged"
     out_dir.mkdir(parents=True, exist_ok=True)
-    total.to_parquet(out_dir / "global_all.parquet", index=False)
+    _safe_to_parquet(total, out_dir / "global_all.parquet")
     total.to_csv(out_dir / "global_all.csv", index=False, encoding="utf-8-sig")
     # compat legado BR
     br_mask = pd.Series(True, index=total.index)
@@ -152,7 +152,7 @@ def merge_all(glob_country: str | None = None) -> pd.DataFrame:
         )
     br = total[br_mask]
     if len(br):
-        br.to_parquet(out_dir / "brazil_male_all.parquet", index=False)
+        _safe_to_parquet(br, out_dir / "brazil_male_all.parquet")
         br.to_csv(out_dir / "brazil_male_all.csv", index=False, encoding="utf-8-sig")
     return total
 
@@ -171,4 +171,16 @@ def fetch_jogos_do_dia(day: str | None = None) -> pd.DataFrame:
 
 def _write_errors(errors: list[str]):
     if errors:
+        DATA.mkdir(parents=True, exist_ok=True)
         (DATA / "download_errors.txt").write_text("\n".join(errors), encoding="utf-8")
+
+
+def _safe_to_parquet(df: pd.DataFrame, path: Path) -> None:
+    """Parquet exige tipos homogêneos — colunas object viram string."""
+    try:
+        df.to_parquet(path, index=False)
+    except Exception:
+        df2 = df.copy()
+        for col in df2.select_dtypes(include=["object"]).columns:
+            df2[col] = df2[col].astype(str)
+        df2.to_parquet(path, index=False)
