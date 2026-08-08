@@ -34,7 +34,7 @@ DADOS (FPT API):
   download-weekly      Atualização semanal (BR full + resto temporada atual)
   calendario [ini] [fim]  Calendário FPT (default: hoje -> domingo)
   fim-de-semana        Rotina completa: dados + calendário + odds API + stakes
-  agendar              Instala tarefa Windows (quarta 10h)
+  agendar              Instala tarefa Windows (sabado 07:00)
   merge                Consolida em data/merged/
   jogos [data]         Jogos do dia
   operacao [data]      Relatório clássico

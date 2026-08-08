@@ -109,3 +109,19 @@ f* = (b×p - q) / b     onde b = odd_efetiva - 1, p = P(lucro no HT)
 stake = min(¼ × f* × confiança, 1% banca)
 ```
 
+## Rotina semanal (sábado + domingo)
+
+Todo **sábado às 07:00** (horário local):
+
+```bash
+python main.py fim-de-semana    # calendário sáb+dom, stakes, PDF, Google Drive
+python main.py agendar          # reinstala tarefa Windows
+```
+
+- **Windows:** tarefa `FutPythonTrader-Weekend` (sábado 07:00)
+- **GitHub Actions:** [weekend-saturday.yml](.github/workflows/weekend-saturday.yml) — cron `0 10 * * 6` (07:00 BRT)
+- **PDF:** `data/weekend/FutPythonTrader_YYYY-MM-DD_YYYY-MM-DD.pdf`
+- **Google Drive:** pasta `FutPythonTrader-Semanal` — ver [docs/GOOGLE_DRIVE_SETUP.md](docs/GOOGLE_DRIVE_SETUP.md)
+
+Repositório: https://github.com/fmaiaaa/FutPythonTraderBR
+
