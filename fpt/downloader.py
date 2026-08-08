@@ -96,14 +96,31 @@ def download_catalog(
 
 
 def download_incremental_weekly() -> dict[str, int]:
-    """Atualização semanal: BR todas temporadas + 1ª temporada demais países."""
-    print("=== BR completo ===")
-    br = download_all_brazil_male(pause_sec=0.6)
-    print("=== Demais países (temporada atual) ===")
-    other = download_catalog(country=None, current_season_only=True, pause_sec=0.5)
-    # remove brazil duplicates from other
-    other = {k: v for k, v in other.items() if not k.startswith("brazil/")}
-    return {**br, **other}
+    """Atualização semanal: watchlist (13 ligas) temporada atual + BR histórico."""
+    from .catalog import load_catalog
+    from .leagues import WATCHLIST_CATALOG
+
+    catalog = load_catalog()
+    stats: dict[str, int] = {}
+    errors: list[str] = []
+    print("=== Watchlist (temporada atual) ===")
+    for country, slug, name in WATCHLIST_CATALOG:
+        meta = catalog.get(country, {}).get(slug)
+        if not meta:
+            print(f"  aviso: {country}/{slug} nao no catalogo")
+            continue
+        season = meta["seasons"][0]
+        key = f"{country}/{slug}/{season}"
+        try:
+            df = download_league_season(country, slug, season, meta.get("name", name))
+            stats[key] = len(df)
+            print(f"OK {key}: {len(df)}")
+        except Exception as e:
+            errors.append(f"{key}: {e}")
+            print(f"ERRO {key}: {e}")
+        time.sleep(0.6)
+    _write_errors(errors)
+    return stats
 
 
 def merge_all(glob_country: str | None = None) -> pd.DataFrame:

@@ -10,9 +10,52 @@ import pandas as pd
 from ..client import DATA
 from ..features.builder import build_single_match_features
 from .calibration import calibrated_probability, dynamic_phi, load_calibration
+from .config import load_model_config
 
 MODEL_DIR = DATA / "models"
 MARKET_CLASS = {"home_win_ft": 0, "draw_ft": 1, "away_win_ft": 2}
+
+
+def _implied_1x2(market_odds: dict | None) -> tuple[float, float, float] | None:
+    if not market_odds:
+        return None
+    h = market_odds.get("Odd_1_FT") or market_odds.get("home_win_ft")
+    d = market_odds.get("Odd_X_FT") or market_odds.get("draw_ft")
+    a = market_odds.get("Odd_2_FT") or market_odds.get("away_win_ft")
+    try:
+        odds = [float(h), float(d), float(a)]
+    except (TypeError, ValueError):
+        return None
+    if any(o <= 1.01 for o in odds):
+        return None
+    inv = [1 / o for o in odds]
+    s = sum(inv)
+    return inv[0] / s, inv[1] / s, inv[2] / s
+
+
+def _shrink_probs(
+    model: tuple[float, float, float],
+    implied: tuple[float, float, float],
+    shrink: float,
+) -> tuple[float, float, float]:
+    out = [(1 - shrink) * m + shrink * i for m, i in zip(model, implied)]
+    s = sum(out)
+    if s <= 0:
+        return model
+    return out[0] / s, out[1] / s, out[2] / s
+
+
+def apply_probability_shrinkage(
+    p_h: float, p_d: float, p_a: float,
+    market_odds: dict | None,
+    shrink: float | None = None,
+) -> tuple[float, float, float]:
+    """Reduz variância — blend com implied odds do mercado."""
+    shrink = shrink if shrink is not None else load_model_config().get("prediction", {}).get("shrinkage_to_market", 0.35)
+    implied = _implied_1x2(market_odds)
+    if implied is None or shrink <= 0:
+        return p_h, p_d, p_a
+    return _shrink_probs((p_h, p_d, p_a), implied, shrink)
 
 
 @dataclass
@@ -73,9 +116,14 @@ class ModelPredictor:
                 phi_dynamic=1.08, confidence=40.0, schedule_notes=notes, model_loaded=False,
             )
 
-        X = pd.DataFrame([feats]).reindex(columns=self.feature_names)
+        X = pd.DataFrame([feats]).reindex(columns=self.feature_names, fill_value=0)
         proba = self.outcome_model.predict_proba(X)[0]
         p_h, p_d, p_a = float(proba[0]), float(proba[1]), float(proba[2])
+
+        shrink = load_model_config().get("prediction", {}).get("shrinkage_to_market", 0.35)
+        if market_odds and market_odds.get("bf_back_home"):
+            shrink = min(0.55, shrink + 0.10)
+        p_h, p_d, p_a = apply_probability_shrinkage(p_h, p_d, p_a, market_odds, shrink=shrink)
 
         cls = MARKET_CLASS.get(market, 0)
         raw_sel = [p_h, p_d, p_a][cls]

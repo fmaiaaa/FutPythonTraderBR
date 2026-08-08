@@ -56,13 +56,10 @@ TRADING_MARKETS = ["home_win_ft", "draw_ft", "away_win_ft"]
 PREMATCH_HT_EXIT_MARKETS = TRADING_MARKETS  # home_win_ft, draw_ft, away_win_ft
 
 
-def prematch_ht_markets_for_row(row) -> list[MarketDef]:
-    """1X2 FT com odd FPT disponivel — entrada pre-jogo, saida HT."""
+def available_markets_for_row(row) -> list[MarketDef]:
+    """Todos os mercados FPT com odd disponivel neste jogo."""
     out: list[MarketDef] = []
-    for mid in PREMATCH_HT_EXIT_MARKETS:
-        m = market_by_id(mid)
-        if not m:
-            continue
+    for m in JOGOS_DIA_MARKETS:
         try:
             v = row.get(m.odd_col) if hasattr(row, "get") else None
             if v is not None and float(v) > 1.01:
@@ -72,9 +69,8 @@ def prematch_ht_markets_for_row(row) -> list[MarketDef]:
     return out
 
 
-def prematch_markets_for_row(row) -> list[MarketDef]:
-    """Alias — estrategia HT exit."""
-    return prematch_ht_markets_for_row(row)
+def prematch_ht_markets_for_row(row) -> list[MarketDef]:
+    return available_markets_for_row(row)
 
 
 def market_by_id(mid: str) -> MarketDef | None:

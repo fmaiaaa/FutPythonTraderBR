@@ -7,6 +7,8 @@ trading:
   commission: 0.05             # comissão Betfair típica (5%)
   min_confidence: 40           # score mínimo (0-100) para entrar
   bankroll: 1000.0             # banca inicial (R$ ou £ — unidade livre)
+  ignore_market_odds_filter: true   # não filtrar por odd atual — só referência
+  reference_mode: true         # exibir todas as linhas (INFO), não ENTER/SKIP
 
 markets:
   # mercados suportados na v1 (back FT → saída HT)

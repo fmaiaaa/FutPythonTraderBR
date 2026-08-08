@@ -20,6 +20,9 @@ class TradeRecommendation:
 
     # Odds
     odd_justa: float
+    back_justa: float
+    lay_justa: float
+    lay_max: float
     phi_seguranca: float
     odd_minima_entrada: float
     odd_mercado: float | None
@@ -36,6 +39,7 @@ class TradeRecommendation:
 
     # Meta
     model_loaded: bool
+    stake_motivo: str = ""
     schedule_notes: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
 

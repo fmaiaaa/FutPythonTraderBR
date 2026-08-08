@@ -11,6 +11,7 @@ from .columns import (
     STAT_FT_AWAY_PREFIX, STAT_FT_HOME_PREFIX, STAT_HT_AWAY_PREFIX, STAT_HT_HOME_PREFIX,
 )
 from .schedule import ScheduleContext, build_team_calendar, schedule_context
+from .context import discipline_proxy_features, match_context_features, season_period_features
 from ..trading.ht_trading import ht_state_label, parse_ht_score
 
 
@@ -89,30 +90,59 @@ def _extract_team_game_row(row: pd.Series, team: str, venue: str) -> dict:
     }
 
 
-def _h2h_features(df_hist: pd.DataFrame, home: str, away: str, n: int = 5) -> dict[str, float]:
+def _h2h_features(df_hist: pd.DataFrame, home: str, away: str, n: int = 10) -> dict[str, float]:
     mask = ((df_hist["Home"] == home) & (df_hist["Away"] == away)) | (
         (df_hist["Home"] == away) & (df_hist["Away"] == home)
     )
     sub = df_hist.loc[mask].tail(n)
     if sub.empty:
-        return {"h2h_n": 0, "h2h_home_win_rate": 0.33, "h2h_avg_goals": 2.5, "h2h_over25": 0.5}
-    home_w = 0
+        return {
+            "h2h_n": 0, "h2h_home_win_rate": 0.33, "h2h_draw_rate": 0.28,
+            "h2h_avg_goals": 2.5, "h2h_over25": 0.5, "h2h_btts": 0.5,
+            "h2h_home_gf_pg": 1.2, "h2h_recent_home_win": 0.33,
+        }
+    home_w = draws = 0
     goals = []
+    home_goals = []
     for _, r in sub.iterrows():
         hs, aws = _safe_float(r["Home_Score"]), _safe_float(r["Away_Score"])
         if hs is None or aws is None:
             continue
         goals.append(hs + aws)
-        if r["Home"] == home and hs > aws:
-            home_w += 1
-        elif r["Away"] == home and aws > hs:
-            home_w += 1
+        if r["Home"] == home:
+            home_goals.append(hs)
+            if hs > aws:
+                home_w += 1
+            elif hs == aws:
+                draws += 1
+        else:
+            home_goals.append(aws)
+            if aws > hs:
+                home_w += 1
+            elif hs == aws:
+                draws += 1
     ng = max(len(goals), 1)
+    recent = sub.tail(3)
+    rh_w = 0
+    rn = 0
+    for _, r in recent.iterrows():
+        hs, aws = _safe_float(r["Home_Score"]), _safe_float(r["Away_Score"])
+        if hs is None or aws is None:
+            continue
+        rn += 1
+        if r["Home"] == home and hs > aws:
+            rh_w += 1
+        elif r["Away"] == home and aws > hs:
+            rh_w += 1
     return {
         "h2h_n": len(sub),
         "h2h_home_win_rate": home_w / ng,
+        "h2h_draw_rate": draws / ng,
         "h2h_avg_goals": float(np.mean(goals)) if goals else 2.5,
         "h2h_over25": sum(1 for g in goals if g > 2) / ng,
+        "h2h_btts": sum(1 for g in goals if g >= 2) / ng if goals else 0.5,
+        "h2h_home_gf_pg": float(np.mean(home_goals)) if home_goals else 1.2,
+        "h2h_recent_home_win": rh_w / max(rn, 1),
     }
 
 
@@ -133,6 +163,30 @@ def _odds_features(row: pd.Series) -> dict[str, float]:
         feats["impl_home_norm"] = (1 / o1) / overround
         feats["impl_draw_norm"] = (1 / ox) / overround
         feats["impl_away_norm"] = (1 / o2) / overround
+
+    # Betfair exchange (live / enriquecimento)
+    for side in ("home", "draw", "away"):
+        bb = _safe_float(row.get(f"bf_back_{side}"))
+        bl = _safe_float(row.get(f"bf_lay_{side}"))
+        if bb and bb > 1.01:
+            feats[f"bf_impl_{side}"] = 1 / bb
+        if bl and bl > 1.01:
+            feats[f"bf_impl_lay_{side}"] = 1 / bl
+        if bb and bl and bb > 1.01:
+            feats[f"bf_spread_{side}"] = (bl - bb) / bb
+    bf_backs = [_safe_float(row.get(f"bf_back_{s}")) for s in ("home", "draw", "away")]
+    if all(x and x > 1.01 for x in bf_backs):
+        inv = [1 / x for x in bf_backs]
+        s = sum(inv)
+        feats["bf_overround_back"] = s
+        feats["bf_impl_home_norm"] = inv[0] / s
+        feats["bf_impl_draw_norm"] = inv[1] / s
+        feats["bf_impl_away_norm"] = inv[2] / s
+    tm = _safe_float(row.get("bf_total_matched"))
+    if tm:
+        feats["bf_log_matched"] = float(np.log1p(tm))
+    if _safe_float(row.get("bf_in_play")):
+        feats["bf_in_play"] = 1.0
     return feats
 
 
@@ -188,6 +242,9 @@ class FeatureBuilder:
         hist = df_hist if df_hist is not None else self.df[self.df["Date"] < row["Date"]]
         feats.update(_h2h_features(hist, home, away))
         feats.update(_odds_features(row))
+        feats.update(match_context_features(row, dt))
+        feats.update(season_period_features(hist, home, away, dt if pd.notna(dt) else pd.Timestamp.now()))
+        feats.update(discipline_proxy_features(hist, home, away))
 
         # diffs forma geral
         h5 = hs.rolling(5)
@@ -197,6 +254,24 @@ class FeatureBuilder:
                 hk = feats.get(f"h_{k}_5", h5.get(k.replace("xg_ft", "xg_ft"), 0))
                 ak = feats.get(f"a_{k}_5", a5.get(k.replace("xg_ft", "xg_ft"), 0))
                 feats[f"diff_{k}_5"] = (hk or 0) - (ak or 0)
+
+        # Fator casa × visitante (mandante em casa vs visitante fora)
+        h_home10 = hs.rolling(10, venue="H")
+        h_away10 = hs.rolling(10, venue="A")
+        a_away10 = as_.rolling(10, venue="A")
+        a_home10 = as_.rolling(10, venue="H")
+        feats["home_ppg_casa_10"] = h_home10.get("ppg", 1.0)
+        feats["away_ppg_fora_10"] = a_away10.get("ppg", 1.0)
+        feats["home_gf_casa_10"] = h_home10.get("goals_for", 1.2)
+        feats["away_ga_fora_10"] = a_away10.get("goals_against", 1.2)
+        feats["home_advantage_ppg"] = feats["home_ppg_casa_10"] - feats["away_ppg_fora_10"]
+        feats["home_advantage_attack"] = feats["home_gf_casa_10"] - feats["away_ga_fora_10"]
+        feats["home_advantage_combined"] = (
+            feats["home_advantage_ppg"] * 0.6 + feats["home_advantage_attack"] * 0.4
+        )
+        feats["home_win_rate_casa_10"] = h_home10.get("win_rate", 0.33)
+        feats["away_win_rate_fora_10"] = a_away10.get("win_rate", 0.33)
+        feats["venue_factor"] = feats["home_win_rate_casa_10"] - feats["away_win_rate_fora_10"]
 
         feats["_schedule_notes"] = sched.notes(home, away)
         return feats
@@ -209,10 +284,11 @@ class FeatureBuilder:
         self,
         min_history: int = 100,
         progress_every: int = 500,
-    ) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
+        return_indices: bool = False,
+    ) -> tuple[pd.DataFrame, pd.Series, pd.Series] | tuple[pd.DataFrame, pd.Series, pd.Series, pd.Series]:
         """Gera X, y_outcome (0=H,1=D,2=A), y_ht_profit para mercado home."""
         self.team_states = {}
-        rows, y_out, y_ht = [], [], []
+        rows, y_out, y_ht, row_indices = [], [], [], []
 
         for i, row in self.df.iterrows():
             if i < min_history:
@@ -223,6 +299,7 @@ class FeatureBuilder:
             feats = self.build_row_features(row, self.df.iloc[:i])
             feats.pop("_schedule_notes", None)
             rows.append(feats)
+            row_indices.append(i)
 
             hs, aws = int(row["Home_Score"]), int(row["Away_Score"])
             if hs > aws:
@@ -249,7 +326,11 @@ class FeatureBuilder:
                 print(f"  features: {len(rows)} amostras...")
 
         X = pd.DataFrame(rows)
-        return X, pd.Series(y_out, name="outcome"), pd.Series(y_ht, name="ht_profit_home")
+        y_out_s = pd.Series(y_out, name="outcome")
+        y_ht_s = pd.Series(y_ht, name="ht_profit_home")
+        if return_indices:
+            return X, y_out_s, y_ht_s, pd.Series(row_indices, name="df_index")
+        return X, y_out_s, y_ht_s
 
 
 _fb_cache: dict[int, "FeatureBuilder"] = {}

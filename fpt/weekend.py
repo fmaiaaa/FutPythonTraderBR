@@ -10,13 +10,25 @@ import pandas as pd
 from .calendar import build_calendar, enrich_with_schedule, list_market_odds, weekend_window
 from .client import DATA
 from .downloader import download_incremental_weekly, merge_all
-from .leagues import filter_watchlist
+from .leagues import filter_watchlist, league_sort_key
 from .markets import JOGOS_DIA_MARKETS, market_by_id
 from .models.train import train_models
 from .pipeline import load_merged
 from .trading.engine import build_market_reference, scan_match_all_markets
 from .trading.market_sim import MarketOdds
+from .trading.config import load_config
 from .trading.the_odds_api import enrich_calendar_with_odds_api, remaining_budget
+
+
+def weekend_report_dir(saturday) -> Path:
+    """data/weekend/YYYY-MM/YYYY-MM-DD/ — sabado como ancora do fim de semana."""
+    from datetime import date as date_cls
+
+    if isinstance(saturday, str):
+        saturday = date_cls.fromisoformat(saturday[:10])
+    month = saturday.strftime("%Y-%m")
+    day = saturday.isoformat()
+    return DATA / "weekend" / month / day
 
 
 def _load_hist() -> pd.DataFrame:
@@ -87,17 +99,23 @@ def scan_weekend(
                 "away": away,
                 "market": rec.market,
                 "market_label": mdef.label if mdef else rec.market,
+                "market_group": mdef.group if mdef else "",
                 "action": rec.action,
                 "prob": rec.probabilidade_estimada,
                 "p_lucro_ht": rec.p_lucro_ht,
                 "odd_justa": rec.odd_justa,
+                "back_justa": rec.back_justa,
+                "lay_justa": rec.lay_justa,
+                "lay_max": rec.lay_max,
                 "phi": rec.phi_seguranca,
                 "odd_min": rec.odd_minima_entrada,
+                "back_min": rec.odd_minima_entrada,
                 "odd_mercado": rec.odd_mercado,
                 "edge_pp": rec.edge_pp,
                 "lucro_est_pct": rec.lucro_estimado_pct,
                 "pct_banca": rec.pct_banca,
                 "stake": rec.stake_valor,
+                "stake_motivo": rec.stake_motivo,
                 "confianca": rec.confianca,
                 "odds_source": "fpt_jogos_dia",
                 "schedule_notes": " | ".join(rec.schedule_notes),
@@ -121,20 +139,32 @@ def format_weekend_report(entries: list[dict], meta: dict) -> str:
         key = (e["date"], e["home"], e["away"])
         by_match.setdefault(key, []).append(e)
 
-    for key in sorted(by_match.keys()):
+    match_keys = sorted(
+        by_match.keys(),
+        key=lambda k: league_sort_key(
+            by_match[k][0].get("league", ""),
+            str(by_match[k][0].get("time", "")),
+            str(k[0]),
+        ),
+    )
+
+    for key in match_keys:
         evs = by_match[key]
         head = evs[0]
         lines += [
             f"{head['date']} {head.get('time', '')} | {head['league']}",
             f"  {head['home']} x {head['away']}",
-            f"  {'Mercado':<16} {'Prob':>6} {'P(HT)':>6} {'Justa':>6} {'phi':>5} {'Min':>6} {'Stake%':>7} {'R$':>7}",
+            f"  {'Mercado':<18} {'Prob':>6} {'P(HT)':>6} {'BackJ':>6} {'LayJ':>6} {'phi':>5} "
+        f"{'BkMin':>6} {'Stake%':>7} {'R$':>7}",
         ]
         for e in sorted(evs, key=lambda x: x.get("market", "")):
             lines.append(
-                f"  {e.get('market_label', e['market']):<16} "
+                f"  {e.get('market_label', e['market']):<18} "
                 f"{e['prob']:>6.1%} {e.get('p_lucro_ht', 0):>6.1%} "
-                f"{e['odd_justa']:>6.2f} {e['phi']:>5.3f} "
-                f"{e['odd_min']:>6.2f} {e['pct_banca']:>6.2%} {e['stake']:>7.2f}"
+                f"{e.get('back_justa', e['odd_justa']):>6.2f} {e.get('lay_justa', 0):>6.2f} "
+                f"{e['phi']:>5.3f} {e.get('back_min', e['odd_min']):>6.2f} "
+                f"{e['pct_banca']:>6.2%} {e['stake']:>7.2f}"
+                + (f"  [{e['stake_motivo']}]" if e.get('stake_motivo') and e['pct_banca'] <= 0 else "")
             )
         if head.get("schedule_notes"):
             lines.append(f"  Agenda: {head['schedule_notes']}")
@@ -177,7 +207,7 @@ def run_weekend_pipeline(
         print("\n[3/6] The Odds API desligada")
 
     if retrain:
-        print("\n[4/6] Re-treinando modelos...")
+        print("\n[4/6] Re-treinando modelos (ensemble)...")
         br_hist = hist
         if "Country" in hist.columns:
             br_hist = hist[hist["Country"].astype(str).str.contains("brazil", case=False, na=False)]
@@ -194,24 +224,44 @@ def run_weekend_pipeline(
 
     print("\n[6/7] Gerando relatorio...")
     report = format_weekend_report(entries, meta)
-    out_dir = DATA / "weekend"
+    out_dir = weekend_report_dir(start)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_txt = out_dir / f"weekend_{start}_{end}.txt"
     out_json = out_dir / f"weekend_{start}_{end}.json"
-    out_pdf = out_dir / f"FutPythonTrader_{start}_{end}.pdf"
+    out_pdf = out_dir / f"FutPythonTrader_{start}_{end}.pdf"  # legado; PDFs por liga abaixo
     out_txt.write_text(report, encoding="utf-8")
     out_json.write_text(json.dumps({"meta": meta, "entries": entries}, indent=2, default=str), encoding="utf-8")
     pd.DataFrame(entries).to_csv(out_txt.with_suffix(".csv"), index=False, encoding="utf-8-sig")
 
-    print("\n[7/7] Gerando PDF e Google Drive...")
-    from .report.pdf_weekend import generate_weekend_pdf
-    from .integrations.google_drive import upload_file
+    print("\n[7/7] Gerando PDFs por campeonato e Google Drive...")
+    from .report.pdf_weekend import generate_weekend_pdfs_by_league
+    from .integrations.google_drive import upload_file, upload_weekend_folder
 
-    generate_weekend_pdf(entries, meta, out_pdf)
-    drive_id = upload_file(out_pdf)
-    meta["pdf_path"] = str(out_pdf)
+    pdf_paths = generate_weekend_pdfs_by_league(entries, meta, out_dir)
+    drive_manifest = upload_weekend_folder(out_dir, str(start))
+    drive_ids = [u["file_id"] for u in drive_manifest.get("uploaded", []) if u.get("file_id")]
+    meta["pdf_paths"] = [str(p) for p in pdf_paths]
+    meta["drive_file_ids"] = drive_ids
+    meta["drive_links"] = drive_manifest.get("uploaded", [])
+    meta["drive_manifest"] = str(out_dir / "drive_links.json")
+    drive_id = drive_ids[0] if drive_ids else None
+
+    if retrain and meta.get("train"):
+        print("\n[7b/7] PDF avaliacao do modelo...")
+        from .models.evaluate import evaluate_holdout, save_evaluation
+        from .report.pdf_model_eval import generate_model_eval_pdf
+        eval_result = evaluate_holdout(hist)
+        save_evaluation(eval_result)
+        eval_pdf = out_dir / f"ModeloEval_{start}.pdf"
+        generate_model_eval_pdf(eval_result, eval_pdf, meta=meta["train"])
+        upload_file(eval_pdf, history_date=str(start))
+        meta["model_eval_pdf"] = str(eval_pdf)
+    meta["pdf_path"] = meta.get("pdf_paths", [str(out_pdf)])[0] if meta.get("pdf_paths") else str(out_pdf)
     meta["drive_file_id"] = drive_id
 
     print(report)
-    print(f"\nSalvo: {out_txt} | PDF: {out_pdf}")
-    return {"meta": meta, "entries": entries, "report_path": str(out_txt), "pdf_path": str(out_pdf)}
+    print(f"\nSalvo: {out_txt} | PDFs: {len(meta.get('pdf_paths', []))} campeonatos")
+    return {
+        "meta": meta, "entries": entries, "report_path": str(out_txt),
+        "pdf_path": meta.get("pdf_path"), "pdf_paths": meta.get("pdf_paths", []),
+    }

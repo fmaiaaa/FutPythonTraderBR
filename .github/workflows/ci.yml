@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Validar imports principais
+        run: |
+          python -c "
+          from fpt.live.betfair_logger import log_states, load_ticks
+          from fpt.live.analytics import build_model_dashboard_metrics
+          from fpt.integrations.google_drive import upload_weekend_folder
+          print('imports OK')
+          "
+
+      - name: Testes unitarios
+        run: pytest tests/ -v --tb=short
+
+      - name: Validar workflow weekend
+        run: |
+          python -c "
+          import yaml
+          from pathlib import Path
+          wf = yaml.safe_load(Path('.github/workflows/weekend-saturday.yml').read_text())
+          assert wf['on']['schedule'][0]['cron'] == '0 10 * * 6'
+          assert 'weekend-report' in wf['jobs']
+          print('workflow YAML OK')
+          "
+
+  dry-run-weekend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Configurar env minimo
+        env:
+          FPT_KEY: ${{ secrets.FPT_API_KEY }}
+        run: |
+          cat > .env <<EOF
+          FPT_API_KEY=${FPT_KEY:-dummy}
+          LOG_LEVEL=INFO
+          EOF
+
+      - name: Smoke test modulos weekend/drive
+        run: |
+          python -c "
+          from fpt.integrations.google_drive import upload_weekend_folder
+          from fpt.weekend import run_weekend_pipeline
+          print('weekend/drive smoke OK')
+          "
+
+      - name: Teste upload Drive (se secrets configurados)
+        env:
+          GSA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+        run: |
+          if [ -z "$GSA_JSON" ] || [ -z "$DRIVE_FOLDER_ID" ]; then
+            echo "::notice::Secrets Drive ausentes — teste de upload ignorado"
+            exit 0
+          fi
+          mkdir -p credentials data/weekend/2099-01/2099-01-01
+          echo "teste CI" > data/weekend/2099-01/2099-01-01/ci_test.txt
+          echo "$GSA_JSON" > credentials/google-service-account.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=credentials/google-service-account.json" >> .env
+          echo "GOOGLE_DRIVE_FOLDER_ID=$DRIVE_FOLDER_ID" >> .env
+          python -c "
+          from pathlib import Path
+          from fpt.integrations.google_drive import upload_weekend_folder
+          m = upload_weekend_folder(Path('data/weekend/2099-01/2099-01-01'), '2099-01-01')
+          assert m.get('uploaded'), m
+          print('Drive upload OK:', len(m['uploaded']))
+          "

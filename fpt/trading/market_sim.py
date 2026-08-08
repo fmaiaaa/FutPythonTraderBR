@@ -7,14 +7,72 @@ import pandas as pd
 
 
 @dataclass
+class ExchangeSide:
+    """Back/lay disponíveis na exchange (melhor nível)."""
+    back: float | None = None
+    lay: float | None = None
+    back_size: float | None = None
+    lay_size: float | None = None
+
+    def spread_pct(self) -> float | None:
+        if self.back and self.lay and self.back > 1.01:
+            return round((self.lay - self.back) / self.back * 100, 2)
+        return None
+
+
+@dataclass
 class MarketOdds:
     home: float | None = None
     draw: float | None = None
     away: float | None = None
     source: str = "unknown"
+    exchange: dict[str, ExchangeSide] | None = None
+    market_id: str | None = None
+    event_id: str | None = None
+    in_play: bool = False
+    status: str | None = None
+    total_matched: float | None = None
+    score_home: int | None = None
+    score_away: int | None = None
+    elapsed_min: int | None = None
 
     def get(self, market: str) -> float | None:
         return {"home_win_ft": self.home, "draw_ft": self.draw, "away_win_ft": self.away}.get(market)
+
+    def get_exchange(self, side: str) -> ExchangeSide | None:
+        if not self.exchange:
+            return None
+        return self.exchange.get(side)
+
+    def get_lay(self, market: str) -> float | None:
+        key = {"home_win_ft": "home", "draw_ft": "draw", "away_win_ft": "away"}.get(market, "")
+        ex = self.get_exchange(key)
+        return ex.lay if ex else None
+
+    def to_market_dict(self) -> dict:
+        """Dict para shrinkage / features do modelo."""
+        d = {
+            "Odd_1_FT": self.home,
+            "Odd_X_FT": self.draw,
+            "Odd_2_FT": self.away,
+            "home_win_ft": self.home,
+            "draw_ft": self.draw,
+            "away_win_ft": self.away,
+        }
+        if self.exchange:
+            for side, ex in self.exchange.items():
+                if ex.back:
+                    d[f"bf_back_{side}"] = ex.back
+                if ex.lay:
+                    d[f"bf_lay_{side}"] = ex.lay
+                sp = ex.spread_pct()
+                if sp is not None:
+                    d[f"bf_spread_{side}"] = sp
+        if self.total_matched:
+            d["bf_total_matched"] = self.total_matched
+        if self.in_play:
+            d["bf_in_play"] = 1.0
+        return d
 
 
 class MarketProvider(ABC):

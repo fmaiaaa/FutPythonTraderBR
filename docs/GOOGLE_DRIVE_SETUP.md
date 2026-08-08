@@ -1,31 +1,54 @@
-# Google Drive — Service Account
+# Google Drive — Service Account (obrigatório para CI)
 
-1. Acesse [Google Cloud Console](https://console.cloud.google.com/)
-2. Crie projeto → APIs → ative **Google Drive API**
-3. Credenciais → **Conta de serviço** → criar → baixar JSON
-4. No Google Drive, crie pasta `FutPythonTrader-Semanal`
-5. Compartilhe a pasta com o e-mail da service account como **Editor**:
-   `futpythontrader@futpythontraderbr.iam.gserviceaccount.com`
+Service Accounts **não têm quota de armazenamento**. Por isso os uploads falham com **403** se a pasta não for compartilhada.
 
-## Local (.env)
+## Passo a passo
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → projeto → **Google Drive API** ativada
+2. **IAM → Service Accounts** → criar → baixar JSON
+3. No **Google Drive pessoal**, crie a pasta `FutPythonTrader-Semanal`
+4. Compartilhe a pasta com o e-mail da SA (ex: `futpythontrader@....iam.gserviceaccount.com`) como **Editor**
+5. Copie o **ID da pasta** da URL: `https://drive.google.com/drive/folders/ESTE_ID`
+
+## `.env` local
 
 ```env
 GOOGLE_APPLICATION_CREDENTIALS=C:/Users/kaleb/FutPythonTraderBR/credentials/google-service-account.json
+GOOGLE_DRIVE_FOLDER_ID=ID_DA_PASTA_COMPARTILHADA
 GOOGLE_DRIVE_FOLDER=FutPythonTrader-Semanal
 ```
 
-Ou cole o JSON inteiro em uma linha:
-```env
-GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
-```
-
-## GitHub Actions (Secrets)
+## GitHub Secrets
 
 | Secret | Valor |
 |--------|-------|
-| `FPT_API_KEY` | Chave FPT |
-| `THE_ODDS_API_KEY` | Opcional |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Conteúdo completo do JSON |
-| `GOOGLE_DRIVE_FOLDER_ID` | Opcional — ID da pasta no Drive |
+| `GOOGLE_DRIVE_FOLDER_ID` | ID da pasta compartilhada |
 
-O workflow roda **todo sábado 07:00 BRT** e envia o PDF para a pasta.
+## Estrutura no Drive
+
+```
+FutPythonTrader-Semanal/
+  2026-08/
+    2026-08-08/
+      FutPythonTrader_brasileirao_serie_a_....pdf
+      ModeloEval_2026-08-08.pdf
+      betfair_analise_2026-08-08.xlsx   # ticks odds (se live rodou no fim de semana)
+      drive_links.json
+      ...
+```
+
+## Verificar upload
+
+```powershell
+python -c "
+from pathlib import Path
+from fpt.integrations.google_drive import upload_weekend_folder
+from fpt.weekend import weekend_report_dir
+from fpt.calendar import weekend_window
+s,_=weekend_window()
+upload_weekend_folder(weekend_report_dir(s), str(s))
+"
+```
+
+O arquivo `drive_links.json` é gerado na pasta do relatório e usado pelo Streamlit para links de download.

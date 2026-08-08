@@ -4,17 +4,17 @@ from datetime import date
 
 import pandas as pd
 
-from ..models.predict import get_predictor
+from ..models.predict import get_predictor, ModelPrediction
 from ..calendar import list_market_odds
 from .config import load_config
-from .fair_odds import fair_odd, min_entry_odd
+from .fair_odds import exchange_fair_odds, fair_odd, min_entry_odd
 from .ht_trading import estimate_ht_trade
-from .kelly import kelly_ht_trade, kelly_simple
-from .market_probs import probability_for_market
+from .kelly import explain_zero_stake, kelly_ht_trade, kelly_simple
+from .market_probs import p_ht_profit_proxy, probability_for_market
 from .market_sim import MarketOdds, MarketProvider, SimulatedMarket
 from .probabilities import estimate_match_probabilities
 from .recommendation import TradeRecommendation
-from ..markets import market_by_id, prematch_ht_markets_for_row
+from ..markets import TRADING_MARKETS, available_markets_for_row, market_by_id
 from ..models.calibration import dynamic_phi
 
 
@@ -28,6 +28,7 @@ def build_recommendation(
     league_slug: str | None = None,
     bankroll: float | None = None,
     reference_mode: bool | None = None,
+    pred: ModelPrediction | None = None,
 ) -> TradeRecommendation:
     cfg = load_config()
     bankroll = bankroll or cfg["trading"]["bankroll"]
@@ -39,19 +40,41 @@ def build_recommendation(
     )
     ignore_odds = cfg["trading"].get("ignore_market_odds_filter", False)
 
-    pred = get_predictor().predict(
-        df, home, away, market, match_date, league_slug,
-        market_odds={
-            "Odd_1_FT": market_odds.home if market_odds else None,
-            "Odd_X_FT": market_odds.draw if market_odds else None,
-            "Odd_2_FT": market_odds.away if market_odds else None,
-        } if market_odds else None,
-    )
+    if pred is None:
+        pred = get_predictor().predict(
+            df, home, away, market, match_date, league_slug,
+            market_odds=(
+                market_odds.to_market_dict()
+                if market_odds and hasattr(market_odds, "to_market_dict")
+                else {
+                    "Odd_1_FT": market_odds.home if market_odds else None,
+                    "Odd_X_FT": market_odds.draw if market_odds else None,
+                    "Odd_2_FT": market_odds.away if market_odds else None,
+                }
+            ) if market_odds else None,
+        )
+    else:
+        sel_map = {
+            "home_win_ft": pred.prob_home,
+            "draw_ft": pred.prob_draw,
+            "away_win_ft": pred.prob_away,
+        }
+        pred = ModelPrediction(
+            prob_home=pred.prob_home,
+            prob_draw=pred.prob_draw,
+            prob_away=pred.prob_away,
+            prob_selection=sel_map.get(market, pred.prob_selection),
+            p_ht_profitable=pred.p_ht_profitable,
+            phi_dynamic=dynamic_phi(sel_map.get(market, pred.prob_selection), "outcome"),
+            confidence=pred.confidence,
+            schedule_notes=pred.schedule_notes,
+            model_loaded=pred.model_loaded,
+        )
 
     p = pred.prob_selection
     phi = pred.phi_dynamic
-    fo = fair_odd(p)
-    mo = min_entry_odd(p, phi)
+    ex = exchange_fair_odds(p, phi)
+    fo, mo = ex.back_fair, ex.back_min
     m_odd = market_odds.get(market) if market_odds else None
     implied = (1 / m_odd) if m_odd and m_odd > 1.01 else None
     edge = round((p - implied) * 100, 2) if implied else None
@@ -65,7 +88,8 @@ def build_recommendation(
     ht = estimate_ht_trade(mp, entry_odd, market)
     p_ht = pred.p_ht_profitable if pred.model_loaded else ht.p_profitable
 
-    if market in ("home_win_ft", "draw_ft", "away_win_ft"):
+    uses_ht = market in TRADING_MARKETS
+    if uses_ht:
         stake = kelly_ht_trade(
             p_ht, entry_odd, ht.expected_exit_odd, bankroll,
             confidence=pred.confidence, edge_pp=None if ignore_odds else edge,
@@ -74,6 +98,8 @@ def build_recommendation(
     else:
         stake = kelly_simple(p, entry_odd, bankroll, confidence=pred.confidence)
         lucro = round((p * entry_odd - 1) * 100, 2)
+
+    stake_motivo = explain_zero_stake(stake, p, p_ht, mo, uses_ht)
 
     reasons = []
     action = "INFO" if reference_mode else "ENTER"
@@ -86,9 +112,9 @@ def build_recommendation(
             reasons.append(f"confiança {pred.confidence:.0f} < {min_conf}")
             action = "SKIP"
         if stake.stake_amount <= 0:
-            reasons.append("Kelly = 0")
+            reasons.append(stake_motivo or "Kelly = 0")
             action = "SKIP"
-        if p_ht < 0.48 and market in ("home_win_ft", "draw_ft", "away_win_ft"):
+        if p_ht < 0.48 and uses_ht:
             reasons.append(f"P(lucro HT) {p_ht:.1%} baixa")
             action = "SKIP"
         if edge is not None and edge < 1.0 and not ignore_odds:
@@ -101,6 +127,9 @@ def build_recommendation(
         prob_home=pred.prob_home, prob_draw=pred.prob_draw, prob_away=pred.prob_away,
         p_lucro_ht=p_ht,
         odd_justa=round(fo, 3),
+        back_justa=ex.back_fair,
+        lay_justa=ex.lay_fair,
+        lay_max=ex.lay_max,
         phi_seguranca=phi,
         odd_minima_entrada=round(mo, 3),
         odd_mercado=m_odd,
@@ -112,10 +141,47 @@ def build_recommendation(
         pct_banca=stake.stake_pct,
         stake_valor=stake.stake_amount,
         confianca=pred.confidence,
+        stake_motivo=stake_motivo,
         model_loaded=pred.model_loaded,
         schedule_notes=pred.schedule_notes,
         reasons=reasons,
     )
+
+
+def build_recommendations_1x2(
+    df: pd.DataFrame,
+    home: str,
+    away: str,
+    market_odds: MarketOdds | None = None,
+    match_date: str | None = None,
+    league_slug: str | None = None,
+    bankroll: float | None = None,
+    markets: list[str] | None = None,
+    reference_mode: bool = False,
+) -> list[TradeRecommendation]:
+    """Mercados 1X2 com uma única passagem de features/ML."""
+    markets = markets or ["home_win_ft", "draw_ft", "away_win_ft"]
+    mkt_dict = None
+    if market_odds:
+        mkt_dict = (
+            market_odds.to_market_dict()
+            if hasattr(market_odds, "to_market_dict")
+            else {
+                "Odd_1_FT": market_odds.home,
+                "Odd_X_FT": market_odds.draw,
+                "Odd_2_FT": market_odds.away,
+            }
+        )
+    base_pred = get_predictor().predict(
+        df, home, away, "home_win_ft", match_date, league_slug, mkt_dict,
+    )
+    return [
+        build_recommendation(
+            df, home, away, mkt, market_odds, match_date, league_slug,
+            bankroll, reference_mode=reference_mode, pred=base_pred,
+        )
+        for mkt in markets
+    ]
 
 
 def build_market_reference(
@@ -129,31 +195,39 @@ def build_market_reference(
     bankroll: float | None = None,
     ml_probs: dict[str, float] | None = None,
     confidence: float = 70.0,
+    p_ht_ml: float | None = None,
 ) -> TradeRecommendation:
-    """Linha de referência: odd justa, φ, odd mínima e stake — sem filtro de odd atual."""
+    """Linha de referencia: back/lay justos, phi, stake HT — sem filtro de odd atual."""
     cfg = load_config()
     bankroll = bankroll or cfg["trading"]["bankroll"]
 
     mp = estimate_match_probabilities(df, home, away, league_slug)
     p = probability_for_market(market, mp, ml_probs)
     phi = dynamic_phi(p, "outcome")
-    fo = fair_odd(p)
-    mo = min_entry_odd(p, phi)
+    ex = exchange_fair_odds(p, phi)
     m_odd = (row_odds or {}).get(market)
     implied = (1 / m_odd) if m_odd and m_odd > 1.01 else None
     edge = round((p - implied) * 100, 2) if implied else None
 
-    ht = estimate_ht_trade(mp, mo, market)
-    if market in ("home_win_ft", "draw_ft", "away_win_ft"):
-        p_ht = ht.p_profitable
-        stake = kelly_ht_trade(p_ht, mo, ht.expected_exit_odd, bankroll, confidence=confidence)
+    mdef = market_by_id(market)
+    uses_ht = True
+    ht = estimate_ht_trade(mp, ex.back_min, market if market in TRADING_MARKETS else "home_win_ft")
+
+    if market in TRADING_MARKETS:
+        p_ht = p_ht_ml if p_ht_ml is not None else ht.p_profitable
+        exit_odd = ht.expected_exit_odd
+        stake = kelly_ht_trade(p_ht, ex.back_min, exit_odd, bankroll, confidence=confidence)
         lucro = ht.expected_profit_pct
     else:
-        stake = kelly_simple(p, mo, bankroll, confidence=confidence)
-        lucro = round((p * mo - 1) * 100, 2)
-        p_ht = p
+        p_ht = p_ht_profit_proxy(market, mp, p)
+        exit_odd = max(ex.lay_max, 1.02)
+        if mdef and mdef.group.endswith("_ht"):
+            exit_odd = max(ex.back_fair * 0.95, 1.02)
+        stake = kelly_ht_trade(p_ht, ex.back_min, exit_odd, bankroll, confidence=confidence)
+        lucro = round((p_ht * (ex.back_min / exit_odd) - 1) * 100, 2)
 
-    mdef = market_by_id(market)
+    stake_motivo = explain_zero_stake(stake, p, p_ht, ex.back_min, uses_ht)
+
     prob_h, prob_d, prob_a = mp.home, mp.draw, mp.away
     if ml_probs:
         prob_h, prob_d, prob_a = ml_probs["home"], ml_probs["draw"], ml_probs["away"]
@@ -163,9 +237,12 @@ def build_market_reference(
         probabilidade_estimada=round(p, 4),
         prob_home=prob_h, prob_draw=prob_d, prob_away=prob_a,
         p_lucro_ht=round(p_ht, 4),
-        odd_justa=round(fo, 3),
+        odd_justa=ex.back_fair,
+        back_justa=ex.back_fair,
+        lay_justa=ex.lay_fair,
+        lay_max=ex.lay_max,
         phi_seguranca=phi,
-        odd_minima_entrada=round(mo, 3),
+        odd_minima_entrada=ex.back_min,
         odd_mercado=m_odd,
         edge_pp=edge,
         implied_market=round(implied, 4) if implied else None,
@@ -175,6 +252,7 @@ def build_market_reference(
         pct_banca=stake.stake_pct,
         stake_valor=stake.stake_amount,
         confianca=confidence,
+        stake_motivo=stake_motivo,
         model_loaded=ml_probs is not None,
         schedule_notes=[],
         reasons=[],
@@ -189,22 +267,47 @@ def scan_match_all_markets(
     match_date: str | None = None,
     bankroll: float | None = None,
 ) -> list[TradeRecommendation]:
-    """Referencia pre-jogo → saida HT: 1X2 FT (Mandante/Empate/Visitante)."""
+    """Todos os mercados FPT do jogo — estrategia entrada pre / saida HT."""
     row_odds = list_market_odds(row) if hasattr(row, "get") else {}
     league_slug = row.get("League_Slug") if hasattr(row, "get") else None
-    odds = MarketOdds(
-        home=row_odds.get("home_win_ft"),
-        draw=row_odds.get("draw_ft"),
-        away=row_odds.get("away_win_ft"),
-        source="fpt_jogos_dia",
-    )
+
+    ml_probs = None
+    confidence = 70.0
+    p_ht_by_market: dict[str, float] = {}
+    mp = estimate_match_probabilities(df, home, away, league_slug)
+    try:
+        pred = get_predictor().predict(
+            df, home, away, "home_win_ft", match_date, league_slug,
+            market_odds={
+                "Odd_1_FT": row_odds.get("home_win_ft"),
+                "Odd_X_FT": row_odds.get("draw_ft"),
+                "Odd_2_FT": row_odds.get("away_win_ft"),
+            },
+        )
+        ml_probs = {"home": pred.prob_home, "draw": pred.prob_draw, "away": pred.prob_away}
+        confidence = pred.confidence
+        from .probabilities import MatchProbabilities
+        mp_ml = MatchProbabilities(
+            home=pred.prob_home, draw=pred.prob_draw, away=pred.prob_away,
+            lambda_home=mp.lambda_home, lambda_away=mp.lambda_away,
+            sample_home=mp.sample_home, sample_away=mp.sample_away,
+        )
+        for mid in TRADING_MARKETS:
+            ht = estimate_ht_trade(mp_ml, min_entry_odd(
+                probability_for_market(mid, mp_ml, ml_probs),
+                dynamic_phi(probability_for_market(mid, mp_ml, ml_probs), "outcome"),
+            ), mid)
+            p_ht_by_market[mid] = ht.p_profitable
+    except Exception:
+        pass
 
     recs = []
-    for m in prematch_ht_markets_for_row(row):
-        recs.append(build_recommendation(
-            df, home, away, market=m.id, market_odds=odds,
+    for m in available_markets_for_row(row):
+        recs.append(build_market_reference(
+            df, home, away, market=m.id, row_odds=row_odds,
             match_date=match_date, league_slug=league_slug,
-            bankroll=bankroll, reference_mode=True,
+            bankroll=bankroll, ml_probs=ml_probs, confidence=confidence,
+            p_ht_ml=p_ht_by_market.get(m.id),
         ))
     return recs
 

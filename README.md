@@ -111,17 +111,36 @@ stake = min(¼ × f* × confiança, 1% banca)
 
 ## Rotina semanal (sábado + domingo)
 
-Todo **sábado às 07:00** (horário local):
+**Watchlist (13 competições):** Série A/B, Copa do Brasil, Libertadores, Sul-Americana, LaLiga, Serie A ITA, Eredivisie, Bundesliga, Ligue 1, Liga Portugal, Premier League, Primera Nacional.
+
+Todo **sábado às 07:00** — gera PDF com **todos os mercados FPT** (1X2 HT/FT, O/U, BTTS, dupla chance): probabilidade, odd justa, φ, odd mínima e stake. **Sem filtro por odd atual** (modo referência para acompanhar o mercado).
 
 ```bash
-python main.py fim-de-semana    # calendário sáb+dom, stakes, PDF, Google Drive
-python main.py agendar          # reinstala tarefa Windows
+python main.py fim-de-semana    # rotina completa
+python main.py calendario       # só jogos da watchlist
+python main.py agendar          # tarefa Windows sábado 07:00
 ```
 
 - **Windows:** tarefa `FutPythonTrader-Weekend` (sábado 07:00)
 - **GitHub Actions:** [weekend-saturday.yml](.github/workflows/weekend-saturday.yml) — cron `0 10 * * 6` (07:00 BRT)
-- **PDF:** `data/weekend/FutPythonTrader_YYYY-MM-DD_YYYY-MM-DD.pdf`
-- **Google Drive:** pasta `FutPythonTrader-Semanal` — ver [docs/GOOGLE_DRIVE_SETUP.md](docs/GOOGLE_DRIVE_SETUP.md)
+- **PDF:** `data/weekend/YYYY-MM/YYYY-MM-DD/*.pdf` (um por campeonato)
+- **Google Drive:** pasta `FutPythonTrader-Semanal` — **obrigatório** `GOOGLE_DRIVE_FOLDER_ID` + compartilhar com SA — ver [docs/GOOGLE_DRIVE_SETUP.md](docs/GOOGLE_DRIVE_SETUP.md)
+
+## Operação Live (Streamlit)
+
+Monitor in-time sábado/domingo: placares Betfair, odds back/lay, alertas ML, PDFs para download.
+
+```bash
+python main.py live              # abre painel
+python main.py live scan         # scan terminal
+RODAR-LIVE.bat
+```
+
+**Deploy online (Streamlit Cloud):**
+
+1. Push do repo para GitHub (entry point: `streamlit_app.py`)
+2. [share.streamlit.io](https://share.streamlit.io) → New app → repo `fmaiaaa/FutPythonTraderBR`
+3. Secrets: `FPT_API_KEY`, `BETFAIR_USERNAME`, `BETFAIR_PASSWORD`, `BETFAIR_APP_KEY`, certificados Betfair (base64 ou paths)
 
 Repositório: https://github.com/fmaiaaa/FutPythonTraderBR
 

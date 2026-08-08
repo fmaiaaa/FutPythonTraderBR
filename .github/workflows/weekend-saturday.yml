@@ -2,17 +2,18 @@ name: Relatorio Semanal Sabado
 
 on:
   schedule:
-    # Sabado 07:00 BRT (UTC-3) = 10:00 UTC
+    # Sabado 07:00 America/Sao_Paulo (BRT) — GitHub cron em UTC
     - cron: "0 10 * * 6"
   workflow_dispatch:
 
 env:
   PYTHONUNBUFFERED: "1"
+  TZ: America/Sao_Paulo
 
 jobs:
   weekend-report:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +33,7 @@ jobs:
             data/models
             data/merged
             data/raw
-          key: fpt-data-${{ hashFiles('fpt/catalog.json', 'fpt/leagues.py') }}-v2
+          key: fpt-data-${{ hashFiles('fpt/catalog.json', 'fpt/leagues.py', 'config/models.yaml') }}-v3
           restore-keys: |
             fpt-data-
 
@@ -41,6 +42,7 @@ jobs:
           FPT_KEY: ${{ secrets.FPT_API_KEY }}
           ODDS_KEY: ${{ secrets.THE_ODDS_API_KEY }}
           GSA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: |
           mkdir -p credentials
           cat > .env <<EOF
@@ -48,49 +50,85 @@ jobs:
           THE_ODDS_API_KEY=${ODDS_KEY}
           THE_ODDS_MONTHLY_BUDGET=500
           GOOGLE_DRIVE_FOLDER=FutPythonTrader-Semanal
-          GOOGLE_DRIVE_FOLDER_ID=${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          GOOGLE_DRIVE_FOLDER_ID=${DRIVE_FOLDER_ID}
           LOG_LEVEL=INFO
           EOF
           if [ -n "$GSA_JSON" ]; then
             echo "$GSA_JSON" > credentials/google-service-account.json
             echo "GOOGLE_APPLICATION_CREDENTIALS=credentials/google-service-account.json" >> .env
           fi
+          if [ -z "$DRIVE_FOLDER_ID" ]; then
+            echo "::warning::GOOGLE_DRIVE_FOLDER_ID nao configurado — upload Drive falhara (403)"
+          fi
 
-      - name: Atualizar dados e treinar (se necessario)
+      - name: Atualizar dados FPT
+        run: python main.py download-weekly
+
+      - name: Treinar modelos (se ausentes ou dados novos)
         run: |
           if [ ! -f data/models/model_outcome.joblib ]; then
-            python main.py download-weekly
             python main.py treinar
           else
-            python main.py download-weekly
+            echo "Modelo em cache — treino ignorado (use workflow_dispatch + retrain manual se necessario)"
           fi
 
       - name: Rotina fim de semana (sabado + domingo)
         run: python main.py fim-de-semana --no-train
+
+      - name: Localizar pasta do relatorio
+        id: paths
+        run: |
+          REPORT_DIR=$(find data/weekend -mindepth 2 -maxdepth 2 -type d | sort | tail -1)
+          if [ -z "$REPORT_DIR" ]; then
+            echo "::error::Nenhuma pasta data/weekend/YYYY-MM/YYYY-MM-DD encontrada"
+            exit 1
+          fi
+          echo "report_dir=$REPORT_DIR" >> $GITHUB_OUTPUT
+          echo "Pasta: $REPORT_DIR"
+          ls -la "$REPORT_DIR"
+
+      - name: Upload Google Drive (todos PDFs + CSV + planilhas Betfair)
+        run: |
+          if [ ! -f credentials/google-service-account.json ]; then
+            echo "::warning::Google Drive: credenciais ausentes — upload ignorado"
+            exit 0
+          fi
+          SAT=$(basename "${{ steps.paths.outputs.report_dir }}")
+          python -c "
+          from pathlib import Path
+          from fpt.integrations.google_drive import upload_weekend_folder
+          report = Path('${{ steps.paths.outputs.report_dir }}')
+          manifest = upload_weekend_folder(report, '$SAT')
+          # Ticks Betfair recentes (se existirem)
+          ticks_root = Path('data/betfair/ticks')
+          if ticks_root.exists():
+              for xlsx in sorted(ticks_root.rglob('betfair_analise_*.xlsx'))[-3:]:
+                  import shutil
+                  dest = report / xlsx.name
+                  shutil.copy2(xlsx, dest)
+                  print('Anexo Betfair:', xlsx.name)
+              manifest2 = upload_weekend_folder(report, '$SAT')
+              manifest['uploaded'] = list({*(manifest.get('uploaded') or []), *(manifest2.get('uploaded') or [])})
+          if not manifest.get('uploaded'):
+              raise SystemExit('Nenhum arquivo enviado ao Drive — verifique GOOGLE_DRIVE_FOLDER_ID e permissao da SA')
+          print('Drive OK:', len(manifest['uploaded']), 'arquivos')
+          "
 
       - name: Upload artefatos GitHub
         uses: actions/upload-artifact@v4
         with:
           name: relatorio-semanal-${{ github.run_id }}
           path: |
-            data/weekend/*.pdf
-            data/weekend/*.csv
-            data/weekend/*.txt
+            data/weekend/**/*.pdf
+            data/weekend/**/*.csv
+            data/weekend/**/*.txt
+            data/weekend/**/drive_links.json
           retention-days: 90
 
-      - name: Upload PDF Google Drive
+      - name: Resumo
         run: |
-          if [ ! -f credentials/google-service-account.json ]; then
-            echo "Google Drive: credenciais ausentes — upload ignorado"
-            exit 0
+          echo "=== Relatorio gerado ==="
+          find data/weekend -name "*.pdf" | head -20
+          if [ -f "${{ steps.paths.outputs.report_dir }}/drive_links.json" ]; then
+            cat "${{ steps.paths.outputs.report_dir }}/drive_links.json"
           fi
-          PDF=$(ls data/weekend/*.pdf 2>/dev/null | tail -1)
-          if [ -z "$PDF" ]; then
-            echo "Nenhum PDF encontrado"
-            exit 0
-          fi
-          python -c "
-          from pathlib import Path
-          from fpt.integrations.google_drive import upload_file
-          upload_file(Path('$PDF'))
-          "

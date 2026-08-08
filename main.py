@@ -7,6 +7,7 @@ from pathlib import Path
 from fpt.leagues import BRAZIL_MALE_LEAGUES
 from fpt.catalog import load_catalog, count_bases, iter_bases
 from fpt.calendar import build_calendar, weekend_window
+from fpt.leagues import filter_watchlist
 from fpt.weekend import run_weekend_pipeline
 from fpt.downloader import (
     download_all_brazil_male, download_league_season, download_catalog,
@@ -41,19 +42,21 @@ DADOS (FPT API):
   resumo / analise     Stats e forma
 
 TRADING (pré-jogo → saída HT, ML + ¼ Kelly, φ dinâmico):
-  treinar              Treina modelos ML (HistGradientBoosting + calibração)
+  treinar              Treina ensemble ML (RF + HistGBM + GBM + seleção features)
+  relatorio-modelo     Treina/avalia holdout 30% + PDF métricas e receita
   scan [data]          Varre jogos do dia — entradas com valor
   avaliar <mand> <vis> [odd] [home|draw|away]
                        Saída completa: prob, odd justa, φ, odd mín, lucro, % banca
   backtest [liga] [phi]
   otimizar-phi [liga]
 
-  dashboard            Painel Streamlit
+  betfair login|esportes|odds <mand> <vis>   API Betfair BR (certificado)
+
+  live [scan]          Monitor in-time (CLI scan ou abre painel Streamlit)
+  dashboard            Painel Streamlit (analise manual)
 
 Configure .env: FPT_API_KEY=...  (futpythontrader.com.br/dashboard)
-
-Pipeline: Modelo Poisson → odd justa → φ → contexto → Modelo HT → ¼Kelly → ENTER/SKIP
-Modo atual: simulação (odds FPT). Betfair: stub em fpt/trading/market_betfair.py
+Betfair BR: docs/betfair/README.md — certs/ + BETFAIR_* no .env
 """)
 
 
@@ -105,10 +108,12 @@ def cmd_calendario(args):
     else:
         start, end = weekend_window()
     cal = build_calendar(start, end)
-    br = cal[cal["is_brazil"]] if "is_brazil" in cal.columns else cal
-    print(f"Total: {len(cal)} | BR: {len(br)}")
-    if not br.empty:
-        print(br[["Date", "Time", "League", "Home", "Away"]].head(20).to_string())
+    wl = filter_watchlist(cal)
+    print(f"Total FPT: {len(cal)} | Watchlist: {len(wl)}")
+    if not wl.empty:
+        cols = ["Date", "Time", "watchlist_league", "Home", "Away"]
+        cols = [c for c in cols if c in wl.columns]
+        print(wl[cols].head(30).to_string())
 
 
 def cmd_fim_de_semana(args):
@@ -168,10 +173,37 @@ def cmd_scan(args):
 def cmd_treinar(_):
     df = load_merged()
     meta = train_models(df)
-    print("\nTreino concluído:")
+    print("\nTreino concluido (ensemble RF + HistGBM + GBM):")
     for k, v in meta.items():
-        if k != "feature_names":
+        if k not in ("feature_names", "selected_features_sample"):
             print(f"  {k}: {v}")
+
+
+def cmd_relatorio_modelo(args):
+    from fpt.models.evaluate import evaluate_holdout, save_evaluation
+    from fpt.report.pdf_model_eval import generate_model_eval_pdf
+    from fpt.calendar import weekend_window
+    from fpt.weekend import weekend_report_dir
+    from fpt.integrations.google_drive import upload_file
+    import json
+
+    df = load_merged()
+    retrain = "--no-train" not in args
+    if retrain:
+        meta = train_models(df)
+    else:
+        meta = json.loads((DATA / "models" / "meta.json").read_text(encoding="utf-8"))
+    result = evaluate_holdout(df)
+    save_evaluation(result)
+    start, _ = weekend_window()
+    out_dir = weekend_report_dir(start)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_pdf = out_dir / f"ModeloEval_{start}.pdf"
+    generate_model_eval_pdf(result, out_pdf, meta=meta)
+    upload_file(out_pdf, history_date=str(start))
+    s = result.summary.get("model", {})
+    print(f"PDF modelo: {out_pdf}")
+    print(f"ROI stake modelo: {s.get('roi_pct', 0):+.1f}% | Entradas: {result.metrics.get('n_trades_model', 0)}")
 
 
 def cmd_avaliar(args):
@@ -222,10 +254,72 @@ def cmd_otimizar_phi(args):
     print(f"\nSalvo: {out}")
 
 
+def cmd_betfair(args):
+    from fpt.integrations.betfair import get_betfair_client
+    from fpt.trading.market_betfair import BetfairMarket
+
+    sub = (args[0] if args else "login").lower()
+    bf = get_betfair_client()
+
+    if sub == "login":
+        token = bf.login(force=True)
+        print(f"Login OK (token {token[:12]}...)")
+        cfg = bf.config
+        print(f"Certs: {cfg.cert_dir} | User: {cfg.username[:3]}***")
+        return
+
+    if sub == "esportes":
+        bf.login()
+        for row in bf.list_event_types()[:15]:
+            et = row.get("eventType", {})
+            print(f"{et.get('id'):>8}  {et.get('name')}")
+        return
+
+    if sub == "odds":
+        if len(args) < 3:
+            print("Uso: betfair odds <mandante> <visitante>")
+            return
+        home, away = args[1], args[2]
+        mkt = BetfairMarket()
+        odds = mkt.get_odds(home, away)
+        print(f"{home} x {away}  |  H={odds.home}  E={odds.draw}  A={odds.away}  ({odds.source})")
+        return
+
+    print("Subcomandos: login | esportes | odds <mand> <vis>")
+
+
 def cmd_dashboard(_):
     import subprocess
     app = Path(__file__).parent / "dashboard.py"
     subprocess.Popen([sys.executable, "-m", "streamlit", "run", str(app)])
+
+
+def cmd_live(args):
+    sub = (args[0] if args else "app").lower()
+    if sub == "scan":
+        from fpt.live.monitor import run_live_scan
+        from fpt.pipeline import load_merged
+
+        df = load_merged()
+        states = run_live_scan(df)
+        print(f"=== LIVE SCAN — {len(states)} jogos ===\n")
+        for s in states:
+            tag = "LIVE" if s.in_play else s.status
+            print(f"[{tag}] {s.league_label}: {s.home} x {s.away}  {s.score_display}  @ {s.kickoff}")
+            for side in ("Casa", "Empate", "Visitante"):
+                o = s.odds.get(side, {})
+                print(f"  {side}: back {o.get('back', '—')} / lay {o.get('lay', '—')}")
+            if s.prob_home:
+                print(f"  Modelo: H{s.prob_home:.0%} E{s.prob_draw:.0%} A{s.prob_away:.0%}")
+            for a in s.alerts:
+                print(f"  >> {a.alert_type}: {a.message}")
+            print()
+        return
+
+    import subprocess
+    app = Path(__file__).parent / "streamlit_app.py"
+    print("Abrindo FPT Live — http://localhost:8501")
+    subprocess.run([sys.executable, "-m", "streamlit", "run", str(app)])
 
 
 def _is_float(s: str) -> bool:
@@ -253,8 +347,11 @@ COMMANDS = {
     "scan": cmd_scan,
     "avaliar": cmd_avaliar,
     "treinar": cmd_treinar,
+    "relatorio-modelo": cmd_relatorio_modelo,
     "backtest": cmd_backtest,
     "otimizar-phi": cmd_otimizar_phi,
+    "betfair": cmd_betfair,
+    "live": cmd_live,
     "dashboard": cmd_dashboard,
     "help": lambda _: help_text(),
 }

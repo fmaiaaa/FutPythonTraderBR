@@ -12,8 +12,8 @@ from fpt.calendar import enrich_with_schedule, weekend_window
 from fpt.client import DATA
 from fpt.leagues import filter_watchlist
 from fpt.pipeline import load_merged
-from fpt.report.pdf_weekend import generate_weekend_pdf
-from fpt.weekend import format_weekend_report, scan_weekend
+from fpt.report.pdf_weekend import generate_weekend_pdfs_by_league
+from fpt.weekend import format_weekend_report, scan_weekend, weekend_report_dir
 from fpt.integrations.google_drive import upload_file
 
 
@@ -35,18 +35,16 @@ def main():
     meta = {"start": str(start), "end": str(end), "n_games_watchlist": len(cal)}
     print(f"Linhas pre-jogo: {len(entries)}")
 
-    out_dir = DATA / "weekend"
+    out_dir = weekend_report_dir(start)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_pdf = out_dir / f"FutPythonTrader_{start}_{end}.pdf"
     out_txt = out_dir / f"weekend_{start}_{end}.txt"
     report = format_weekend_report(entries, meta)
     out_txt.write_text(report, encoding="utf-8")
-    generate_weekend_pdf(entries, meta, out_pdf)
-    print(f"PDF: {out_pdf}")
-
-    fid = upload_file(out_pdf)
-    if fid:
-        print(f"Drive upload OK (file_id={fid})")
+    pdf_paths = generate_weekend_pdfs_by_league(entries, meta, out_dir)
+    print(f"PDFs gerados: {len(pdf_paths)}")
+    for p in pdf_paths:
+        print(f"  {p}")
+        upload_file(p, history_date=str(start))
 
 
 if __name__ == "__main__":

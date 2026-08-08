@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .config import load_config
-from .ht_trading import HTTradeEstimate, estimate_ht_trade
-from .probabilities import MatchProbabilities
 
 
 @dataclass
@@ -104,3 +102,30 @@ def kelly_simple(
         confidence=confidence,
         capped_by=capped_by,
     )
+
+
+def explain_zero_stake(
+    stake: StakeDecision,
+    p: float,
+    p_ht: float,
+    back_min: float,
+    uses_ht_kelly: bool,
+) -> str:
+    """Explica por que stake % = 0 no relatorio."""
+    if stake.stake_pct > 0:
+        return ""
+    b = max(back_min - 1, 0.01)
+    if uses_ht_kelly:
+        eff_b = b * 0.6
+        if p_ht < 0.35:
+            return f"P(lucro HT)={p_ht:.1%} baixa — trade HT sem expectativa positiva"
+        if kelly_fraction(p_ht, eff_b) <= 0:
+            return (
+                f"Kelly HT<=0: P(lucro HT)={p_ht:.1%} vs back min {back_min:.2f} "
+                f"(sem edge na saida no intervalo)"
+            )
+    if kelly_fraction(p, b) <= 0:
+        return f"Kelly<=0: prob={p:.1%} sem edge na back min {back_min:.2f}"
+    if stake.capped_by:
+        return ""
+    return "Confianca baixa reduziu 1/4 Kelly a zero"

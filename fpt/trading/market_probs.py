@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import re
 
-from ..markets import JOGOS_DIA_MARKETS, market_by_id
+from ..markets import JOGOS_DIA_MARKETS, TRADING_MARKETS, market_by_id
 from .config import load_config
 from .probabilities import MatchProbabilities, _poisson_pmf, ht_state_probabilities
 
@@ -22,20 +22,21 @@ def _score_probs(lh: float, la: float, max_goals: int = 8) -> dict[tuple[int, in
 
 
 def _ou_line(market_id: str) -> float | None:
-    m = re.search(r"(over|under)(\d+)(?:_(\d))?", market_id)
+    """over05 -> 0.5, over15 -> 1.5, over25 -> 2.5, etc."""
+    m = re.search(r"(?:over|under)(\d{2})", market_id)
     if not m:
         return None
-    whole, frac = int(m.group(2)), int(m.group(3) or 0)
-    return whole + frac / 10
+    return int(m.group(1)) / 10.0
 
 
 def prob_over_line(lh: float, la: float, line: float) -> float:
     grid = _score_probs(lh, la)
     p = 0.0
     for (h, a), pr in grid.items():
-        if h + a > line:
+        total = h + a
+        if total > line:
             p += pr
-        elif abs(h + a - line) < 1e-9 and line == int(line):
+        elif abs(total - line) < 1e-9 and line == int(line):
             p += pr * 0.5
     return max(0.001, min(0.999, p))
 
@@ -52,7 +53,6 @@ def probability_for_market(
     mp: MatchProbabilities,
     ml_probs: dict[str, float] | None = None,
 ) -> float:
-    """Probabilidade estimada por mercado (ML para 1X2 FT; Poisson para demais)."""
     mdef = market_by_id(market_id)
     if not mdef:
         return 0.5
@@ -104,11 +104,44 @@ def probability_for_market(
     return 0.5
 
 
-def all_market_probabilities(
-    mp: MatchProbabilities,
-    ml_probs: dict[str, float] | None = None,
-) -> dict[str, float]:
-    return {
-        m.id: round(probability_for_market(m.id, mp, ml_probs), 4)
-        for m in JOGOS_DIA_MARKETS
-    }
+def p_ht_profit_proxy(market_id: str, mp: MatchProbabilities, p_sel: float) -> float:
+    """
+    P(lucro ao fechar no intervalo) — proxy por tipo de mercado.
+    1X2 FT: usa estimate_ht_trade externamente; aqui fallback Poisson HT.
+    """
+    mdef = market_by_id(market_id)
+    if not mdef:
+        return p_sel
+
+    cfg = load_config()["model"]
+    share = cfg["ht_goal_share"]
+    lh_ht = mp.lambda_home * share
+    la_ht = mp.lambda_away * share
+    group = mdef.group
+
+    if market_id in TRADING_MARKETS:
+        ht = ht_state_probabilities(mp)
+        if market_id == "home_win_ft":
+            return ht["home_leading"] + ht["draw"] * 0.55
+        if market_id == "away_win_ft":
+            return ht["home_losing"] + ht["draw"] * 0.55
+        return ht["draw"] + (ht["home_leading"] + ht["home_losing"]) * 0.2
+
+    if group.endswith("_ht"):
+        return p_sel
+
+    if group.startswith("ou_") and "_ft" in group:
+        line = _ou_line(market_id)
+        if line is None:
+            return p_sel * 0.7
+        ht_line = max(0.5, line * share * 2)
+        p_over_ht = prob_over_line(lh_ht, la_ht, ht_line)
+        if mdef.selection == "over":
+            return p_over_ht
+        return 1 - p_over_ht
+
+    if group == "btts":
+        p_btts_ht = prob_btts(lh_ht, la_ht)
+        return p_btts_ht if mdef.selection == "yes" else 1 - p_btts_ht
+
+    return p_sel * 0.65

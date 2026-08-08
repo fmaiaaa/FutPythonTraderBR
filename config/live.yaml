@@ -1,0 +1,35 @@
+# Monitoramento live — fim de semana (sábado/domingo)
+
+live:
+  refresh_seconds: 60
+  lookback_days: 0
+  lookahead_days: 1
+  bankroll: 1000.0
+  min_edge_pp: 1.0
+  min_confidence: 40
+  watch_near_value_pct: 2.0    # alerta WATCH se odd a X% da mínima
+  alert_cooldown_seconds: 300  # não repetir mesmo alerta em 5 min
+  log_alerts: true
+  log_betfair_ticks: true   # CSV diário em data/betfair/ticks/ para análise de estratégias
+  markets:
+    - home_win_ft
+    - draw_ft
+    - away_win_ft
+
+strategies:
+  back_value:
+    enabled: true
+    description: "Back quando odd exchange >= odd mínima (modelo × φ) e edge >= min"
+  lay_exit_ht:
+    enabled: true
+    description: "In-play: lay favorável para saída HT (odd lay <= lay_max estimado)"
+  steam_move:
+    enabled: true
+    description: "Movimento forte de odd (>5%) vs último tick — revisar entrada"
+  betfair_enrichment:
+    enabled: true
+    shrinkage_boost: 0.10      # +10% shrinkage quando odds Betfair disponíveis
+
+betfair:
+  prefer_over_fpt: true
+  min_liquidity: 1000.0      # totalMatched mínimo para confiar
