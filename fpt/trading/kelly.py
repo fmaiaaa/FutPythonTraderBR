@@ -9,8 +9,8 @@ from .config import load_config
 class StakeDecision:
     kelly_full: float
     kelly_quarter: float
-    stake_pct: float
-    stake_amount: float
+    stake_pct: float       # % da banca em risco (back = apostado; lay = exposição)
+    stake_amount: float    # back: valor apostado; lay: valor matched (API)
     confidence: float
     capped_by: str | None
 
@@ -112,7 +112,8 @@ def kelly_lay(
 ) -> StakeDecision:
     """
     Kelly para lay: ganha se a seleção NÃO vence (q = 1 - p).
-    Stake = valor matched no lay; exposição = stake × (lay_odd - 1).
+    stake_pct = % da banca em risco (exposição / liability), teto max_risk.
+    stake_amount = valor matched na Betfair (= exposição / (lay_odd - 1)).
     """
     cfg = load_config()["trading"]
     k_frac = cfg["kelly_fraction"]
@@ -126,17 +127,17 @@ def kelly_lay(
     k_quarter = k_full * k_frac * conf_adj
 
     capped_by = None
-    max_stake_pct = max_risk / (L - 1)
-    if k_quarter > max_stake_pct:
-        k_quarter = max_stake_pct
-        capped_by = "max_liability_3pct"
+    if k_quarter > max_risk:
+        k_quarter = max_risk
+        capped_by = "max_risk_3pct"
 
-    stake = round(bankroll * k_quarter, 2)
+    liability = round(bankroll * k_quarter, 2)
+    matched = round(liability / (L - 1), 2) if L > 1.01 else 0.0
     return StakeDecision(
         kelly_full=round(k_full, 4),
         kelly_quarter=round(k_full * k_frac, 4),
         stake_pct=round(k_quarter, 4),
-        stake_amount=stake,
+        stake_amount=matched,
         confidence=confidence,
         capped_by=capped_by,
     )

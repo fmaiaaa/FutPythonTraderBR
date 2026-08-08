@@ -75,8 +75,8 @@ class TradeRecommendation:
             f"LUCRO ESTIMADO (HT):        {self.lucro_estimado_pct:+.2f}%",
             f"KELLY CHEIO:                {self.kelly_cheio:.2%}",
             f"¼ KELLY:                    {self.kelly_quarto:.2%}",
-            f"% BANCA BACK:               {self.stake_back_pct:.2%}",
-            f"% BANCA LAY:                {self.stake_lay_pct:.2%}",
+            f"% BANCA (risco back):       {self.stake_back_pct:.2%}",
+            f"% BANCA (risco lay):        {self.stake_lay_pct:.2%}",
             f"CONFIANÇA:                  {self.confianca:.0f}/100",
             f"Modelo ML:                  {'sim' if self.model_loaded else 'Poisson (treine: main.py treinar)'}",
         ]

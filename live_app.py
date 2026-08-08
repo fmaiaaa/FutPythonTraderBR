@@ -482,8 +482,8 @@ def _page_monitor(cfg, auto, refresh_sec, filter_status, filter_league, only_ale
                             "Edge": r.get("edge_pp"),
                             "Kelly cheio": f"{r.get('kelly_cheio', 0):.2%}",
                             "¼ Kelly": f"{r.get('kelly_quarto', 0):.2%}",
-                            "Stake Back %": f"{r.get('stake_back_pct', r.get('pct_banca', 0)):.2%}",
-                            "Stake Lay %": f"{r.get('stake_lay_pct', 0):.2%}",
+                            "% Banca Back": f"{r.get('stake_back_pct', r.get('pct_banca', 0)):.2%}",
+                            "% Banca Lay": f"{r.get('stake_lay_pct', 0):.2%}",
                         }
                         for r in s.recommendations
                     ]), hide_index=True)

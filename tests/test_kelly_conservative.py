@@ -1,8 +1,8 @@
-"""Kelly conservador — back mín / lay máx."""
+"""Kelly conservador — back mín / lay máx; stake = % banca em risco."""
 from __future__ import annotations
 
 from fpt.trading.fair_odds import exchange_fair_odds
-from fpt.trading.kelly import compute_back_lay_stakes, kelly_fraction, kelly_simple
+from fpt.trading.kelly import compute_back_lay_stakes, kelly_fraction, kelly_lay, kelly_simple
 
 
 def test_kelly_at_back_min_differs_from_fair():
@@ -24,6 +24,14 @@ def test_lay_kelly_zero_at_lay_max_when_no_edge():
     assert stake_lay.stake_pct == 0.0
 
 
+def test_lay_stake_pct_is_liability_capped_at_3pct():
+    p = 0.35
+    ex = exchange_fair_odds(p, phi=1.08)
+    sd = kelly_lay(p, ex.lay_max, 1000.0, confidence=100.0)
+    assert sd.stake_pct <= 0.03 + 1e-6
+    assert sd.stake_amount == round(1000.0 * sd.stake_pct / (ex.lay_max - 1), 2)
+
+
 def test_kelly_positive_with_edge_at_back_min():
     p = 0.58
     ex = exchange_fair_odds(p, phi=1.05)
@@ -43,6 +51,7 @@ def test_kelly_ht_uses_back_min_entry():
         p_ht=p_ht, exit_odd=exit_odd, uses_ht=True,
     )
     assert stake_ht.stake_pct > 0.0
+    assert stake_ht.stake_pct <= 0.03 + 1e-6
 
 
 def test_kelly_simple_on_back_min():

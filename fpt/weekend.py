@@ -240,6 +240,9 @@ def run_weekend_pipeline(
     from .report.pdf_weekend import generate_weekend_pdfs_by_league
     from .integrations.google_drive import upload_file, upload_weekend_folder
 
+    for old_pdf in out_dir.glob("*.pdf"):
+        old_pdf.unlink(missing_ok=True)
+
     pdf_paths = generate_weekend_pdfs_by_league(entries, meta, out_dir)
     drive_manifest = upload_weekend_folder(out_dir, str(start))
     drive_ids = [u["file_id"] for u in drive_manifest.get("uploaded", []) if u.get("file_id")]

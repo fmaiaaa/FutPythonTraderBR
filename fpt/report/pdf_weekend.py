@@ -141,7 +141,7 @@ def _match_table(evs: list[dict], theme: dict, styles) -> Table:
 
     headers = [
         "Mercado", "Prob", "P(HT)", "Back J.", "Lay J.", "φ",
-        "Bk min", "Ly max", "Odd", "Stake Back", "Stake Lay",
+        "Bk min", "Ly max", "Odd", "% Banca B", "% Banca L",
     ]
     rows = [[_p(h, hdr) for h in headers]]
 

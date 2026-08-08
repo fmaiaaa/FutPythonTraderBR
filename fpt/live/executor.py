@@ -84,6 +84,8 @@ class BetfairExecutor:
             return {"status": "ERROR", "message": "selection_id ausente — reconecte Betfair"}
 
         stake_amount = max(round(bankroll * stake_pct, 2), _min_stake_brl())
+        if side == "LAY":
+            stake_amount = max(round(bankroll * stake_pct / (price - 1), 2), _min_stake_brl())
         instruction = self.client.build_limit_instruction(
             selection_id=int(alert.selection_id),
             side=side,

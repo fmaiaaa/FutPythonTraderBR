@@ -569,11 +569,33 @@ def upload_file_detailed(
 
 
 
-    meta = {"name": local_path.name, "parents": [target_folder]}
-
     media = MediaFileUpload(str(local_path), resumable=True)
 
     try:
+        q = (
+            f"name='{local_path.name}' and '{target_folder}' in parents "
+            f"and trashed=false"
+        )
+        existing = service.files().list(
+            q=q, fields="files(id)", supportsAllDrives=True, includeItemsFromAllDrives=True,
+        ).execute().get("files", [])
+
+        if existing:
+            updated = service.files().update(
+                fileId=existing[0]["id"],
+                media_body=media,
+                fields="id,webViewLink,webContentLink",
+                supportsAllDrives=True,
+            ).execute()
+            link = updated.get("webViewLink")
+            print(f"Google Drive: atualizado -> {link}")
+            return UploadResult(
+                file_id=updated["id"],
+                name=local_path.name,
+                web_view_link=link,
+            )
+
+        meta = {"name": local_path.name, "parents": [target_folder]}
 
         created = service.files().create(
 
