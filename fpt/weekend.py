@@ -113,7 +113,9 @@ def scan_weekend(
                 "odd_mercado": rec.odd_mercado,
                 "edge_pp": rec.edge_pp,
                 "lucro_est_pct": rec.lucro_estimado_pct,
-                "pct_banca": rec.pct_banca,
+                "pct_banca": rec.stake_back_pct,
+                "stake_back_pct": rec.stake_back_pct,
+                "stake_lay_pct": rec.stake_lay_pct,
                 "stake": rec.stake_valor,
                 "stake_motivo": rec.stake_motivo,
                 "confianca": rec.confianca,
@@ -155,7 +157,7 @@ def format_weekend_report(entries: list[dict], meta: dict) -> str:
             f"{head['date']} {head.get('time', '')} | {head['league']}",
             f"  {head['home']} x {head['away']}",
             f"  {'Mercado':<18} {'Prob':>6} {'P(HT)':>6} {'BackJ':>6} {'LayJ':>6} {'phi':>5} "
-        f"{'BkMin':>6} {'Stake%':>7} {'R$':>7}",
+            f"{'BkMin':>6} {'Bk%':>6} {'Lay%':>6}",
         ]
         for e in sorted(evs, key=lambda x: x.get("market", "")):
             lines.append(
@@ -163,8 +165,9 @@ def format_weekend_report(entries: list[dict], meta: dict) -> str:
                 f"{e['prob']:>6.1%} {e.get('p_lucro_ht', 0):>6.1%} "
                 f"{e.get('back_justa', e['odd_justa']):>6.2f} {e.get('lay_justa', 0):>6.2f} "
                 f"{e['phi']:>5.3f} {e.get('back_min', e['odd_min']):>6.2f} "
-                f"{e['pct_banca']:>6.2%} {e['stake']:>7.2f}"
-                + (f"  [{e['stake_motivo']}]" if e.get('stake_motivo') and e['pct_banca'] <= 0 else "")
+                f"{e.get('stake_back_pct', e.get('pct_banca', 0)):>6.2%} "
+                f"{e.get('stake_lay_pct', 0):>6.2%}"
+                + (f"  [{e['stake_motivo']}]" if e.get('stake_motivo') and e.get('stake_back_pct', 0) <= 0 and e.get('stake_lay_pct', 0) <= 0 else "")
             )
         if head.get("schedule_notes"):
             lines.append(f"  Agenda: {head['schedule_notes']}")

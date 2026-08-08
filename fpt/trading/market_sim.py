@@ -13,6 +13,7 @@ class ExchangeSide:
     lay: float | None = None
     back_size: float | None = None
     lay_size: float | None = None
+    selection_id: int | None = None
 
     def spread_pct(self) -> float | None:
         if self.back and self.lay and self.back > 1.01:

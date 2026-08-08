@@ -34,7 +34,8 @@ from fpt.live.config import load_live_config
 from fpt.live.models import LiveMatchState
 from fpt.live.monitor import LiveMonitor
 from fpt.live.reports import find_weekend_reports
-from fpt.pipeline import load_merged
+from fpt.live.executor import BetfairExecutor, load_recent_executions
+from fpt.report.chart_equity import decompose_equity_time
 
 BR = ZoneInfo("America/Sao_Paulo")
 
@@ -85,6 +86,12 @@ def main():
             st.rerun()
 
         st.divider()
+        exec_cfg = load_live_config().get("execution", {})
+        st.markdown("**Execução Betfair**")
+        if exec_cfg.get("enabled"):
+            st.success("Ativa" + (" (PAPER)" if exec_cfg.get("paper_mode", True) else " (REAL)"))
+        else:
+            st.info("Desabilitada — `execution.enabled: true` em config/live.yaml")
         mon = _get_monitor()
         st.markdown("**Betfair**")
         st.success("Conectado") if mon.betfair_ok else st.warning("Não configurado")
@@ -276,16 +283,23 @@ def _page_model_backtest(bankroll: float):
             mode="model" if mode.startswith("Modelo") else "fixed",
             fixed_pct=0.01,
         )
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=eq["date"], y=eq["equity_pct"], mode="lines", name="Equity %", fill="tozeroy"))
-        fig.add_hline(y=0, line_dash="dash", line_color="gray")
-        fig.update_layout(
-            title="Curva de equity (% sobre banca inicial)",
-            xaxis_title="Data",
-            yaxis_title="Retorno acumulado (%)",
-            height=420,
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        if len(eq) >= 2:
+            dates = eq["date"].values
+            y = eq["equity_pct"].values.astype(float)
+            dec = decompose_equity_time(dates, y)
+
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
+                                subplot_titles=("Evolução geral", "Tendência (OLS)", "Ciclo (série − tendência)"))
+            fig.add_trace(go.Scatter(x=dates, y=y, name="Retorno %", line=dict(color="#1565C0")), row=1, col=1)
+            fig.add_hline(y=0, line_dash="dash", line_color="gray", row=1, col=1)
+            fig.add_trace(go.Scatter(x=dates, y=y, line=dict(color="#1565C0", width=1), opacity=0.25, showlegend=False), row=2, col=1)
+            fig.add_trace(go.Scatter(x=dates, y=dec["trend"], name="Tendência", line=dict(color="#C62828", width=2)), row=2, col=1)
+            fig.add_trace(go.Scatter(x=dates, y=dec["cycle"], name="Ciclo", fill="tozeroy", line=dict(color="#546E7A")), row=3, col=1)
+            fig.update_layout(height=720, showlegend=True)
+            fig.update_yaxes(title_text="% banca", row=1, col=1)
+            fig.update_yaxes(title_text="% banca", row=2, col=1)
+            fig.update_yaxes(title_text="p.p.", row=3, col=1)
+            st.plotly_chart(fig, use_container_width=True)
 
         dd = drawdown_series(eq)
         fig_dd = px.area(dd, x="date", y="drawdown_pct", title="Drawdown (%)")
@@ -397,11 +411,47 @@ def _page_monitor(cfg, auto, refresh_sec, filter_status, filter_league, only_ale
     c6.metric("Próx. tick", f"{refresh_sec}s")
 
     all_alerts = [a for s in states for a in s.alerts]
+    exec_cfg = load_live_config().get("execution", {})
+    executor = BetfairExecutor()
+
     if all_alerts:
         st.subheader("🔔 Alertas")
         for a in all_alerts[:15]:
             icon = "🟢" if a.alert_type == "ENTER" else ("🟠" if a.alert_type == "WATCH" else "🔵")
             st.markdown(f"{icon} **{a.alert_type}** — {a.home} x {a.away}: {a.message}")
+
+        if executor.enabled or exec_cfg.get("paper_mode", True):
+            st.caption(
+                f"Execução: {'PAPER' if executor.paper_mode else 'REAL'} | "
+                f"{'automática' if exec_cfg.get('auto_execute') else 'aprovação manual'}"
+            )
+            for a in all_alerts:
+                if a.alert_type not in ("ENTER", "HT_EXIT"):
+                    continue
+                side = a.recommended_side or ("LAY" if a.alert_type == "HT_EXIT" else "BACK")
+                stake = a.stake_back_pct if side == "BACK" else a.stake_lay_pct
+                if stake <= 0:
+                    continue
+                cols = st.columns([3, 1, 1])
+                cols[0].markdown(
+                    f"**{a.home} x {a.away}** — {side} @ "
+                    f"{a.odd_back if side == 'BACK' else a.odd_lay:.2f} | stake **{stake:.2%}**"
+                )
+                if exec_cfg.get("auto_execute") and a.alert_type == "ENTER":
+                    res = executor.execute_alert(a, side=side, bankroll=bankroll, approved=True)
+                    cols[1].success(res.get("status", "OK"))
+                else:
+                    if cols[1].button(f"✅ Executar {side}", key=f"exec_{a.alert_id}"):
+                        res = executor.execute_alert(a, side=side, bankroll=bankroll, approved=True)
+                        if res.get("status") in ("PLACED", "PAPER"):
+                            st.success(res.get("message", "Ordem enviada"))
+                        else:
+                            st.error(res.get("message", "Falha"))
+
+        recent = load_recent_executions(5)
+        if recent:
+            with st.expander("Últimas execuções"):
+                st.dataframe(pd.DataFrame(recent), use_container_width=True, hide_index=True)
 
     if not states:
         st.info("Nenhum jogo na watchlist.")
@@ -434,9 +484,10 @@ def _page_monitor(cfg, auto, refresh_sec, filter_status, filter_league, only_ale
                             "P": f"{r.get('probabilidade_estimada', 0):.1%}",
                             "Back": r.get("odd_back"),
                             "Lay": r.get("odd_lay"),
-                            "Min": r.get("odd_minima_entrada"),
+                            "Mín": r.get("odd_minima_entrada"),
                             "Edge": r.get("edge_pp"),
-                            "Stake R$": r.get("stake_valor"),
+                            "Stake Back %": f"{r.get('stake_back_pct', r.get('pct_banca', 0)):.2%}",
+                            "Stake Lay %": f"{r.get('stake_lay_pct', 0):.2%}",
                         }
                         for r in s.recommendations
                     ]), hide_index=True)

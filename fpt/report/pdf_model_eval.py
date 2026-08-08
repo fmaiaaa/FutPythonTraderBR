@@ -74,7 +74,7 @@ def _chart_calibration(trades, path: Path) -> None:
     ax.plot(pred, obs, c="#1A237E", alpha=0.5)
     ax.set_xlabel("Prob. predita (mandante)", fontsize=9)
     ax.set_ylabel("Freq. observada", fontsize=9)
-    ax.set_title("Calibracao — mandante FT (holdout 30%)", fontname="Times New Roman", fontsize=12, fontweight="bold")
+    ax.set_title("Calibração — mandante FT (holdout 30%)", fontname="Times New Roman", fontsize=12, fontweight="bold")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.grid(True, alpha=0.35)
@@ -96,7 +96,7 @@ def _chart_errors(meta: dict, path: Path) -> None:
     ]
     fig, ax = plt.subplots(figsize=(7.5, 4), facecolor="#FAFAFA")
     bars = ax.bar(labels, vals, color=["#1A237E"] * 4 + ["#2E7D32"] * 3, alpha=0.88, edgecolor="white")
-    ax.set_title("Metricas no holdout (30%)", fontname="Times New Roman", fontsize=12, fontweight="bold")
+    ax.set_title("Métricas no holdout (30%)", fontname="Times New Roman", fontsize=12, fontweight="bold")
     ax.set_ylabel("Valor", fontsize=9)
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=22, ha="right", fontsize=8)
     _save_fig(fig, path)
@@ -136,7 +136,7 @@ def generate_model_eval_pdf(
     story = []
     story.append(Spacer(1, 0.5 * cm))
     story.append(_centered_para("FutPythonTrader", title))
-    story.append(_centered_para("Relatorio de Avaliacao do Modelo", h2))
+    story.append(_centered_para("Relatório de Avaliação do Modelo", h2))
     story.append(_centered_para(
         f"{datetime.now().strftime('%d/%m/%Y %H:%M')} · Ensemble RF + HistGBM + GBM · Holdout 30%",
         sub,
@@ -146,7 +146,7 @@ def generate_model_eval_pdf(
     mot = meta.get("metrics_outcome_test", {})
     mht = meta.get("metrics_ht_test", {})
     mrows = [
-        ["Metrica", "1X2 Outcome", "Lucro HT"],
+        ["Métrica", "1X2 Outcome", "Lucro HT"],
         ["MAE", f"{mot.get('mae_home', 0):.4f}", f"{mht.get('mae', 0):.4f}"],
         ["ECE", f"{mot.get('ece_home', 0):.4f}", f"{mht.get('ece', 0):.4f}"],
         ["Brier", f"{mot.get('brier_home', 0):.4f}", f"{mht.get('brier', 0):.4f}"],
@@ -166,7 +166,7 @@ def generate_model_eval_pdf(
     story.append(Spacer(1, 0.35 * cm))
 
     summ = result.summary
-    brow = [["Cenario", "Retorno final", "Max DD", "Trades", "Falencias"]]
+    brow = [["Cenário", "Retorno final", "Max DD", "Trades", "Falências"]]
     for k in ["model"] + sorted([x for x in summ if x.startswith("fixed_")], key=lambda x: float(x.replace("fixed_", "").replace("%", ""))):
         if k not in summ or not isinstance(summ[k], dict):
             continue
@@ -197,7 +197,7 @@ def generate_model_eval_pdf(
         _chart_calibration(result.trades, chart_dir / "calib.png")
 
     story.append(PageBreak())
-    story.append(_centered_para("Diagnostico do Modelo", h2))
+    story.append(_centered_para("Diagnóstico do Modelo", h2))
     story.append(Spacer(1, 0.2 * cm))
     story.append(_centered_image(p_err, 15 * cm, 6.5 * cm))
     if (chart_dir / "calib.png").exists():
@@ -219,10 +219,10 @@ def generate_model_eval_pdf(
             color=col, accent=acc, bankruptcy_dates=ec.bankruptcies,
         )
         story.append(PageBreak())
-        story.append(_centered_para(f"Evolucao da Banca — {_stake_label(sk)}", h2))
+        story.append(_centered_para(f"Evolução da Banca — {_stake_label(sk)}", h2))
         note = ""
         if ec.bankruptcies:
-            note = f"Falencia em: {', '.join(ec.bankruptcies)}"
+            note = f"Quebra de banca em: {', '.join(ec.bankruptcies)}"
         elif ec.final_pct <= -50:
             note = "Queda severa — risco elevado"
         if note:

@@ -22,6 +22,11 @@ class LiveAlert:
     edge_pp: float | None
     stake_pct: float
     stake_valor: float
+    stake_back_pct: float = 0.0
+    stake_lay_pct: float = 0.0
+    market_id: str | None = None
+    selection_id: int | None = None
+    recommended_side: str = "BACK"  # BACK | LAY
     score: str = ""
     in_play: bool = False
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
@@ -43,6 +48,11 @@ class LiveAlert:
             "edge_pp": self.edge_pp,
             "stake_pct": self.stake_pct,
             "stake_valor": self.stake_valor,
+            "stake_back_pct": self.stake_back_pct,
+            "stake_lay_pct": self.stake_lay_pct,
+            "market_id": self.market_id,
+            "selection_id": self.selection_id,
+            "recommended_side": self.recommended_side,
             "score": self.score,
             "in_play": self.in_play,
             "timestamp": self.timestamp,

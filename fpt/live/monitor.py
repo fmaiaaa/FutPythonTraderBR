@@ -205,6 +205,7 @@ class LiveMonitor:
                 odds_table[side] = {
                     "back": ex.back if ex else None,
                     "lay": ex.lay if ex else None,
+                    "selection_id": ex.selection_id if ex else None,
                 }
 
             best_action = "—"

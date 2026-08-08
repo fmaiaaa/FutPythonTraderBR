@@ -108,7 +108,7 @@ def _simulate_equity(
 
         if bank <= 0:
             bank = 0
-            pcts.append(-100.0)
+            pcts.append(max(-100.0, (bank / initial_bankroll - 1) * 100))
             dates.append(dt)
             bankruptcies.append(dt)
             break

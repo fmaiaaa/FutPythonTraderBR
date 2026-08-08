@@ -15,9 +15,16 @@ MARKET_LABELS = {
     "away_win_ft": "Visitante",
 }
 
+SIDE_KEY = {"home_win_ft": "home", "draw_ft": "draw", "away_win_ft": "away"}
+
 
 def _alert_id(home: str, away: str, market: str, alert_type: str) -> str:
     return f"{home}|{away}|{market}|{alert_type}"
+
+
+def _selection_id(market_odds: MarketOdds, market: str) -> int | None:
+    ex = market_odds.get_exchange(SIDE_KEY.get(market, "home"))
+    return ex.selection_id if ex else None
 
 
 def evaluate_match_strategies(
@@ -33,10 +40,6 @@ def evaluate_match_strategies(
     in_play: bool = False,
     score: str = "",
 ) -> tuple[list[dict], list[LiveAlert]]:
-    """
-    Avalia mercados 1X2 com odds Betfair + modelo ML.
-    Retorna recomendações por mercado e alertas acionáveis.
-    """
     cfg = load_live_config()
     live = cfg["live"]
     strat = cfg.get("strategies", {})
@@ -65,10 +68,11 @@ def evaluate_match_strategies(
             pred=base_pred,
         )
 
-        side_key = {"home_win_ft": "home", "draw_ft": "draw", "away_win_ft": "away"}[mkt]
+        side_key = SIDE_KEY[mkt]
         ex = market_odds.get_exchange(side_key)
         odd_back = ex.back if ex else market_odds.get(mkt)
         odd_lay = ex.lay if ex else market_odds.get_lay(mkt)
+        sel_id = _selection_id(market_odds, mkt)
 
         rec_dict = rec.to_dict()
         rec_dict["market_label"] = MARKET_LABELS.get(mkt, mkt)
@@ -77,86 +81,67 @@ def evaluate_match_strategies(
         rec_dict["betfair_enriched"] = market_odds.source == "betfair_br"
         recs.append(rec_dict)
 
-        # --- BACK VALUE ---
+        def _base_alert(alert_type, severity, message, side="BACK"):
+            return LiveAlert(
+                alert_id=_alert_id(home, away, mkt, alert_type),
+                alert_type=alert_type,
+                severity=severity,
+                home=home, away=away, league=league, market=mkt,
+                message=message,
+                prob_est=rec.probabilidade_estimada,
+                odd_back=odd_back, odd_lay=odd_lay,
+                odd_min=rec.odd_minima_entrada,
+                edge_pp=rec.edge_pp,
+                stake_pct=rec.stake_back_pct if side == "BACK" else rec.stake_lay_pct,
+                stake_valor=rec.stake_valor,
+                stake_back_pct=rec.stake_back_pct,
+                stake_lay_pct=rec.stake_lay_pct,
+                market_id=market_odds.market_id,
+                selection_id=sel_id,
+                recommended_side=side,
+                score=score, in_play=in_play,
+            )
+
         if strat.get("back_value", {}).get("enabled", True):
             if rec.action == "ENTER":
-                alerts.append(LiveAlert(
-                    alert_id=_alert_id(home, away, mkt, "ENTER"),
-                    alert_type="ENTER",
-                    severity="high",
-                    home=home, away=away, league=league, market=mkt,
-                    message=(
+                alerts.append(_base_alert(
+                    "ENTER", "high",
+                    (
                         f"ENTRADA {MARKET_LABELS[mkt]}: back {odd_back:.2f} >= min {rec.odd_minima_entrada:.2f} "
-                        f"| P={rec.probabilidade_estimada:.1%} edge={rec.edge_pp:+.1f}pp stake R${rec.stake_valor:.2f}"
+                        f"| P={rec.probabilidade_estimada:.1%} edge={rec.edge_pp:+.1f}pp "
+                        f"stake back {rec.stake_back_pct:.2%} lay {rec.stake_lay_pct:.2%}"
                     ),
-                    prob_est=rec.probabilidade_estimada,
-                    odd_back=odd_back, odd_lay=odd_lay,
-                    odd_min=rec.odd_minima_entrada,
-                    edge_pp=rec.edge_pp,
-                    stake_pct=rec.pct_banca,
-                    stake_valor=rec.stake_valor,
-                    score=score, in_play=in_play,
+                    side="BACK",
                 ))
             elif odd_back and odd_back >= rec.odd_minima_entrada * (1 - watch_pct):
                 if rec.edge_pp is not None and rec.edge_pp >= min_edge * 0.5:
-                    alerts.append(LiveAlert(
-                        alert_id=_alert_id(home, away, mkt, "WATCH"),
-                        alert_type="WATCH",
-                        severity="medium",
-                        home=home, away=away, league=league, market=mkt,
-                        message=(
+                    alerts.append(_base_alert(
+                        "WATCH", "medium",
+                        (
                             f"QUASE VALOR {MARKET_LABELS[mkt]}: back {odd_back:.2f} "
                             f"(min {rec.odd_minima_entrada:.2f}) P={rec.probabilidade_estimada:.1%}"
                         ),
-                        prob_est=rec.probabilidade_estimada,
-                        odd_back=odd_back, odd_lay=odd_lay,
-                        odd_min=rec.odd_minima_entrada,
-                        edge_pp=rec.edge_pp,
-                        stake_pct=rec.pct_banca,
-                        stake_valor=rec.stake_valor,
-                        score=score, in_play=in_play,
                     ))
 
-        # --- HT EXIT (in-play lay) ---
         if in_play and strat.get("lay_exit_ht", {}).get("enabled", True) and odd_lay:
             ex_fair = exchange_fair_odds(rec.probabilidade_estimada, rec.phi_seguranca)
             if odd_lay <= ex_fair.lay_max:
-                alerts.append(LiveAlert(
-                    alert_id=_alert_id(home, away, mkt, "HT_EXIT"),
-                    alert_type="HT_EXIT",
-                    severity="high" if in_play else "medium",
-                    home=home, away=away, league=league, market=mkt,
-                    message=(
-                        f"SAIDA HT {MARKET_LABELS[mkt]}: lay {odd_lay:.2f} <= max {ex_fair.lay_max:.2f} "
-                        f"| placar {score}"
+                alerts.append(_base_alert(
+                    "HT_EXIT", "high" if in_play else "medium",
+                    (
+                        f"SAÍDA HT {MARKET_LABELS[mkt]}: lay {odd_lay:.2f} <= max {ex_fair.lay_max:.2f} "
+                        f"| placar {score} | stake lay {rec.stake_lay_pct:.2%}"
                     ),
-                    prob_est=rec.probabilidade_estimada,
-                    odd_back=odd_back, odd_lay=odd_lay,
-                    odd_min=rec.odd_minima_entrada,
-                    edge_pp=rec.edge_pp,
-                    stake_pct=rec.pct_banca,
-                    stake_valor=rec.stake_valor,
-                    score=score, in_play=True,
+                    side="LAY",
                 ))
 
-        # --- STEAM MOVE ---
         if prev_odds and strat.get("steam_move", {}).get("enabled", True):
             prev = prev_odds.get(mkt)
             if prev and odd_back and abs(odd_back - prev) / prev >= 0.05:
                 direction = "subiu" if odd_back > prev else "caiu"
-                alerts.append(LiveAlert(
-                    alert_id=_alert_id(home, away, mkt, "STEAM"),
-                    alert_type="STEAM",
-                    severity="low",
-                    home=home, away=away, league=league, market=mkt,
-                    message=f"STEAM {MARKET_LABELS[mkt]}: odd {direction} {prev:.2f} → {odd_back:.2f}",
-                    prob_est=rec.probabilidade_estimada,
-                    odd_back=odd_back, odd_lay=odd_lay,
-                    odd_min=rec.odd_minima_entrada,
-                    edge_pp=rec.edge_pp,
-                    stake_pct=rec.pct_banca,
-                    stake_valor=rec.stake_valor,
-                    score=score, in_play=in_play,
+                alerts.append(_base_alert(
+                    "STEAM", "low",
+                    f"STEAM {MARKET_LABELS[mkt]}: odd {direction} {prev:.2f} → {odd_back:.2f}",
                 ))
 
     return recs, alerts

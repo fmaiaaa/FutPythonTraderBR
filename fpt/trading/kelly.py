@@ -104,6 +104,74 @@ def kelly_simple(
     )
 
 
+def kelly_lay(
+    p_selection_wins: float,
+    lay_odd: float,
+    bankroll: float,
+    confidence: float = 70.0,
+) -> StakeDecision:
+    """
+    Kelly para lay: ganha se a seleção NÃO vence (q = 1 - p).
+    Stake = valor matched no lay; exposição = stake × (lay_odd - 1).
+    """
+    cfg = load_config()["trading"]
+    k_frac = cfg["kelly_fraction"]
+    max_risk = cfg["max_risk_per_trade"]
+
+    L = max(float(lay_odd or 0), 1.02)
+    q = max(0.001, min(0.999, 1.0 - p_selection_wins))
+    b = 1.0 / (L - 1)
+    k_full = kelly_fraction(q, b)
+    conf_adj = max(0.3, min(1.0, confidence / 100))
+    k_quarter = k_full * k_frac * conf_adj
+
+    capped_by = None
+    max_stake_pct = max_risk / (L - 1)
+    if k_quarter > max_stake_pct:
+        k_quarter = max_stake_pct
+        capped_by = "max_liability_1pct"
+
+    stake = round(bankroll * k_quarter, 2)
+    return StakeDecision(
+        kelly_full=round(k_full, 4),
+        kelly_quarter=round(k_full * k_frac, 4),
+        stake_pct=round(k_quarter, 4),
+        stake_amount=stake,
+        confidence=confidence,
+        capped_by=capped_by,
+    )
+
+
+def compute_back_lay_stakes(
+    p: float,
+    back_odd: float | None,
+    lay_odd: float | None,
+    bankroll: float,
+    confidence: float,
+    *,
+    p_ht: float | None = None,
+    exit_odd: float | None = None,
+    uses_ht: bool = False,
+) -> tuple[StakeDecision, StakeDecision]:
+    """Calcula stake % Kelly para back e lay separadamente."""
+    back_price = back_odd if back_odd and back_odd > 1.01 else None
+    lay_price = lay_odd if lay_odd and lay_odd > 1.01 else None
+
+    if uses_ht and p_ht is not None and back_price and exit_odd:
+        stake_back = kelly_ht_trade(p_ht, back_price, exit_odd, bankroll, confidence=confidence)
+    elif back_price:
+        stake_back = kelly_simple(p, back_price, bankroll, confidence=confidence)
+    else:
+        stake_back = StakeDecision(0, 0, 0, 0, confidence, None)
+
+    if lay_price:
+        stake_lay = kelly_lay(p, lay_price, bankroll, confidence=confidence)
+    else:
+        stake_lay = StakeDecision(0, 0, 0, 0, confidence, None)
+
+    return stake_back, stake_lay
+
+
 def explain_zero_stake(
     stake: StakeDecision,
     p: float,

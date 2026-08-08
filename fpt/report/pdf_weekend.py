@@ -141,13 +141,14 @@ def _match_table(evs: list[dict], theme: dict, styles) -> Table:
 
     headers = [
         "Mercado", "Prob", "P(HT)", "Back J.", "Lay J.", "φ",
-        "Bk min", "Ly max", "Odd", "Stake", "R$",
+        "Bk min", "Ly max", "Odd", "Stake Back", "Stake Lay",
     ]
     rows = [[_p(h, hdr) for h in headers]]
 
     for e in evs:
         label = e.get("market_label", e.get("market", ""))
-        stake_pct = float(e.get("pct_banca") or 0)
+        stake_back = float(e.get("stake_back_pct") or e.get("pct_banca") or 0)
+        stake_lay = float(e.get("stake_lay_pct") or 0)
         rows.append([
             _p(label, cell),
             _p(_fmt_pct(e.get("prob")), cell_c),
@@ -158,8 +159,8 @@ def _match_table(evs: list[dict], theme: dict, styles) -> Table:
             _p(_fmt_f(e.get("back_min") or e.get("odd_min")), cell_c),
             _p(_fmt_f(e.get("lay_max")), cell_c),
             _p(_fmt_f(e.get("odd_mercado")), cell_c),
-            _p(_fmt_pct(e.get("pct_banca")), cell_c),
-            _p(_fmt_f(e.get("stake")), cell_c),
+            _p(_fmt_pct(stake_back), cell_c),
+            _p(_fmt_pct(stake_lay), cell_c),
         ])
 
     # 18cm total
@@ -182,7 +183,9 @@ def _match_table(evs: list[dict], theme: dict, styles) -> Table:
         bg = tint_a if ri % 2 == 1 else tint_b
         style_cmds.append(("BACKGROUND", (0, ri), (-1, ri), bg))
         ev = evs[ri - 1]
-        if float(ev.get("pct_banca") or 0) > 0:
+        sb = float(ev.get("stake_back_pct") or ev.get("pct_banca") or 0)
+        sl = float(ev.get("stake_lay_pct") or 0)
+        if sb > 0 or sl > 0:
             style_cmds.append(("BACKGROUND", (9, ri), (10, ri), _tint(accent, 0.75)))
             style_cmds.append(("TEXTCOLOR", (9, ri), (10, ri), _hex(theme["dark"])))
     t.setStyle(TableStyle(style_cmds))

@@ -43,6 +43,7 @@ def parsed_to_market_odds(parsed: dict) -> MarketOdds:
             lay=data.get("lay"),
             back_size=data.get("back_size"),
             lay_size=data.get("lay_size"),
+            selection_id=data.get("selection_id"),
         )
         exchange[key] = ex
         if key == "home":

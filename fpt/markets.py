@@ -43,7 +43,7 @@ JOGOS_DIA_MARKETS: list[MarketDef] = [
     MarketDef("under45_ft", "Under 4.5 FT", "Odd_Under45_FT", "ou_ft", "under"),
     # BTTS + DC
     MarketDef("btts_yes", "BTTS Sim", "Odd_BTTS_Yes", "btts", "yes"),
-    MarketDef("btts_no", "BTTS Nao", "Odd_BTTS_No", "btts", "no"),
+    MarketDef("btts_no", "BTTS Não", "Odd_BTTS_No", "btts", "no"),
     MarketDef("dc_1x", "Dupla 1X", "Odd_1X_FT", "dc", "home"),
     MarketDef("dc_12", "Dupla 12", "Odd_12_FT", "dc", "home"),
     MarketDef("dc_x2", "Dupla X2", "Odd_X2_FT", "dc", "away"),

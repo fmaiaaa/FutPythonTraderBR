@@ -249,6 +249,43 @@ class BetfairClient:
             out["elapsed_min"] = score.get("timeElapsed")
         return out
 
+    def place_orders(
+        self,
+        market_id: str,
+        instructions: list[dict],
+        customer_ref: str | None = None,
+    ) -> dict:
+        """Envia ordens LIMIT (BACK/LAY) via Sports API."""
+        if not market_id or not instructions:
+            raise ValueError("market_id e instructions obrigatórios")
+        params: dict = {
+            "marketId": market_id,
+            "instructions": instructions,
+        }
+        if customer_ref:
+            params["customerRef"] = customer_ref[:32]
+        return self.call("SportsAPING/v1.0/placeOrders", params)
+
+    @staticmethod
+    def build_limit_instruction(
+        selection_id: int,
+        side: str,
+        size: float,
+        price: float,
+        persistence: str = "LAPSE",
+    ) -> dict:
+        return {
+            "selectionId": int(selection_id),
+            "handicap": 0,
+            "side": side.upper(),
+            "orderType": "LIMIT",
+            "limitOrder": {
+                "size": round(float(size), 2),
+                "price": round(float(price), 2),
+                "persistenceType": persistence,
+            },
+        }
+
     def fetch_match_odds_batch(self, event_ids: list[str]) -> list[dict]:
         """Match Odds + book + placar para vários eventos."""
         if not event_ids:

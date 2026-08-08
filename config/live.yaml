@@ -30,6 +30,12 @@ strategies:
     enabled: true
     shrinkage_boost: 0.10      # +10% shrinkage quando odds Betfair disponíveis
 
+execution:
+  enabled: false               # true para permitir ordens reais
+  paper_mode: true             # true = simula (log only); false = API Betfair
+  auto_execute: false            # false = exige aprovação no Streamlit
+  min_stake_brl: 2.0
+
 betfair:
   prefer_over_fpt: true
   min_liquidity: 1000.0      # totalMatched mínimo para confiar
