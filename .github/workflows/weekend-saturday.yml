@@ -32,7 +32,7 @@ jobs:
             data/models
             data/merged
             data/raw
-          key: fpt-data-${{ hashFiles('fpt/catalog.json') }}-${{ github.run_number }}
+          key: fpt-data-${{ hashFiles('fpt/catalog.json', 'fpt/leagues.py') }}-v2
           restore-keys: |
             fpt-data-
 
@@ -59,7 +59,7 @@ jobs:
       - name: Atualizar dados e treinar (se necessario)
         run: |
           if [ ! -f data/models/model_outcome.joblib ]; then
-            python main.py download-all
+            python main.py download-weekly
             python main.py treinar
           else
             python main.py download-weekly
