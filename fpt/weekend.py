@@ -243,6 +243,14 @@ def run_weekend_pipeline(
     pdf_paths = generate_weekend_pdfs_by_league(entries, meta, out_dir)
     drive_manifest = upload_weekend_folder(out_dir, str(start))
     drive_ids = [u["file_id"] for u in drive_manifest.get("uploaded", []) if u.get("file_id")]
+
+    from .storage import is_github_actions
+    if is_github_actions():
+        from .integrations.google_drive import upload_models_bundle
+        models_info = upload_models_bundle()
+        if models_info:
+            meta.setdefault("models_drive", models_info)
+            print(f"Modelos no Drive: {models_info.get('web_view_link', models_info.get('file_id'))}")
     meta["pdf_paths"] = [str(p) for p in pdf_paths]
     meta["drive_file_ids"] = drive_ids
     meta["drive_links"] = drive_manifest.get("uploaded", [])

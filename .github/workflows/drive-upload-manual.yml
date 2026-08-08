@@ -39,25 +39,35 @@ jobs:
           export GOOGLE_DRIVE_FOLDER_ID="$DRIVE_FOLDER_ID"
           bash scripts/github_setup_drive_env.sh
 
-      - name: Baixar artefato do ultimo relatorio (se existir)
-        continue-on-error: true
+      - name: Baixar artefato do ultimo relatorio semanal
         run: |
-          RUN_ID=$(gh run list --workflow=weekend-saturday.yml --limit 5 --json databaseId,conclusion -q '.[] | select(.conclusion=="failure" or .conclusion=="success") | .databaseId' | head -1)
-          if [ -n "$RUN_ID" ]; then
-            gh run download "$RUN_ID" -D /tmp/artifact || true
-            find /tmp/artifact -type f -name "*.pdf" -exec cp {} data/weekend/ \; 2>/dev/null || true
+          RUN_ID=$(gh run list --workflow="Relatorio Semanal Sabado" --limit 15 \
+            --json databaseId,conclusion \
+            -q '.[] | select(.conclusion=="success") | .databaseId' | head -1)
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::Nenhum workflow Relatorio Semanal Sabado concluido com sucesso."
+            exit 1
           fi
+          echo "Baixando artefato da run $RUN_ID"
+          gh run download "$RUN_ID" -D /tmp/artifact
+          mkdir -p data/weekend
+          if [ -d /tmp/artifact/data/weekend ]; then
+            cp -r /tmp/artifact/data/weekend/* data/weekend/
+          else
+            find /tmp/artifact -type d -path '*/weekend/*/*' -exec cp -r {} data/weekend/ \; 2>/dev/null || true
+          fi
+          find data/weekend -type f | head -20
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Verificar permissao Drive
         run: python scripts/verify_drive_access.py
 
-      - name: Upload relatorio local ou artefato
+      - name: Upload relatorio para Drive
         run: |
           REPORT_DIR=$(find data/weekend -mindepth 2 -maxdepth 2 -type d 2>/dev/null | sort | tail -1)
           if [ -z "$REPORT_DIR" ]; then
-            echo "::error::Nenhuma pasta de relatorio. Rode o workflow Relatorio Semanal Sabado primeiro."
+            echo "::error::Pasta de relatorio nao encontrada no artefato."
             exit 1
           fi
           SAT=$(basename "$REPORT_DIR")

@@ -25,6 +25,7 @@ from pathlib import Path
 
 
 from ..client import ENV_PATH, DATA
+from ..storage import persist_data_locally
 
 
 
@@ -216,6 +217,108 @@ def resolve_history_folder(service, root_folder_id: str, saturday_iso: str) -> s
     month_id = _find_or_create_folder(service, root_folder_id, month)
 
     return _find_or_create_folder(service, month_id, day)
+
+
+def _find_folder(service, parent_id: str, name: str) -> str | None:
+    q = (
+        f"name='{name}' and '{parent_id}' in parents "
+        f"and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    )
+    res = service.files().list(
+        q=q, fields="files(id,name)", supportsAllDrives=True, includeItemsFromAllDrives=True,
+    ).execute()
+    files = res.get("files", [])
+    return files[0]["id"] if files else None
+
+
+def get_history_folder_id(service, root_folder_id: str, saturday_iso: str) -> str | None:
+    """Busca pasta YYYY-MM/YYYY-MM-DD sem criar."""
+    month_id = _find_folder(service, root_folder_id, saturday_iso[:7])
+    if not month_id:
+        return None
+    return _find_folder(service, month_id, saturday_iso[:10])
+
+
+def list_folder_files(service, folder_id: str, *, pdf_only: bool = False) -> list[dict]:
+    q = f"'{folder_id}' in parents and trashed=false"
+    if pdf_only:
+        q += " and mimeType='application/pdf'"
+    res = service.files().list(
+        q=q,
+        fields="files(id,name,mimeType,webViewLink,webContentLink,modifiedTime)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+        orderBy="name",
+    ).execute()
+    return [
+        {
+            "name": f.get("name", ""),
+            "file_id": f.get("id", ""),
+            "web_view_link": f.get("webViewLink"),
+            "mime_type": f.get("mimeType"),
+            "modified_time": f.get("modifiedTime"),
+        }
+        for f in res.get("files", [])
+    ]
+
+
+def list_weekend_drive_reports(saturday_iso: str) -> list[dict]:
+    """Lista PDFs do fim de semana no Google Drive (fonte principal fora do CI)."""
+    service, _ = _build_drive_service()
+    if not service:
+        return []
+    root = get_root_folder_id(service)
+    if not root:
+        return []
+    day_id = get_history_folder_id(service, root, saturday_iso)
+    if not day_id:
+        return []
+    return [f for f in list_folder_files(service, day_id, pdf_only=True) if f.get("name", "").endswith(".pdf")]
+
+
+def upload_models_bundle(models_dir: Path | None = None) -> dict | None:
+    """Envia zip dos modelos para Drive/models/ (GitHub Actions → Streamlit Cloud)."""
+    import zipfile
+    from io import BytesIO
+    from googleapiclient.http import MediaIoBaseUpload
+
+    models_dir = models_dir or (DATA / "models")
+    joblib_files = list(models_dir.glob("*.joblib"))
+    meta = models_dir / "meta.json"
+    if not joblib_files:
+        return None
+
+    service, _ = _build_drive_service()
+    if not service:
+        return None
+    root = get_root_folder_id(service)
+    if not root:
+        return None
+
+    models_folder = _find_or_create_folder(service, root, "models")
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in joblib_files:
+            zf.write(p, p.name)
+        if meta.exists():
+            zf.write(meta, meta.name)
+    buf.seek(0)
+
+    media = MediaIoBaseUpload(buf, mimetype="application/zip", resumable=False)
+    for fname in ("fpt-models-latest.zip",):
+        q = f"name='{fname}' and '{models_folder}' in parents and trashed=false"
+        existing = service.files().list(q=q, fields="files(id)", supportsAllDrives=True).execute().get("files", [])
+        body = {"name": fname, "parents": [models_folder]}
+        if existing:
+            updated = service.files().update(
+                fileId=existing[0]["id"], media_body=media, fields="id,webViewLink", supportsAllDrives=True,
+            ).execute()
+            return {"file_id": updated["id"], "web_view_link": updated.get("webViewLink"), "name": fname}
+        created = service.files().create(
+            body=body, media_body=media, fields="id,webViewLink", supportsAllDrives=True,
+        ).execute()
+        return {"file_id": created["id"], "web_view_link": created.get("webViewLink"), "name": fname}
+    return None
 
 
 
@@ -524,7 +627,8 @@ def _ensure_folder(service) -> str | None:
 
         print("  AVISO: SA nao tem quota — compartilhe pasta existente e use GOOGLE_DRIVE_FOLDER_ID")
 
-        (DATA / "google_drive_folder_id.txt").write_text(fid, encoding="utf-8")
+        if persist_data_locally():
+            (DATA / "google_drive_folder_id.txt").write_text(fid, encoding="utf-8")
 
         return fid
 

@@ -351,23 +351,11 @@ def _page_pdfs(now: datetime):
         for link in reports["drive_links"]:
             url = link.get("web_view_link") or "#"
             st.markdown(f"- [{link.get('name', 'PDF')}]({url})")
-
-    st.subheader("Download local")
-    if not reports["pdfs_local"]:
-        st.info("Nenhum PDF local. Rode `python main.py fim-de-semana` ou aguarde o GitHub Actions de sábado.")
-        return
-
-    for pdf in reports["pdfs_local"]:
-        path = Path(pdf["path"])
-        if path.exists():
-            with open(path, "rb") as f:
-                st.download_button(
-                    label=f"⬇ {pdf['name']} ({pdf['size_kb']} KB)",
-                    data=f.read(),
-                    file_name=pdf["name"],
-                    mime="application/pdf",
-                    key=f"dl_{pdf['name']}",
-                )
+    else:
+        st.info(
+            "Nenhum PDF no Drive ainda. O **GitHub Actions** gera e envia todo sábado 07:00 (BRT). "
+            "[Ver workflows](https://github.com/fmaiaaa/FutPythonTraderBR/actions)"
+        )
 
 
 def _page_monitor(cfg, auto, refresh_sec, filter_status, filter_league, only_alerts, bankroll, now):
@@ -391,7 +379,7 @@ def _page_monitor(cfg, auto, refresh_sec, filter_status, filter_league, only_ale
     global_updated = monitor.last_scan.strftime("%H:%M:%S") if monitor.last_scan else "—"
     st.info(
         f"📊 **Última atualização de odds:** {global_updated} | "
-        f"Fonte: Betfair Exchange BR | Ticks salvos em planilha diária"
+        f"Fonte: Betfair Exchange BR"
     )
 
     if filter_status:

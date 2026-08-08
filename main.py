@@ -34,8 +34,7 @@ DADOS (FPT API):
   download-global [pais]  Catálogo global FPT (172 ligas, todas temporadas)
   download-weekly      Atualização semanal (BR full + resto temporada atual)
   calendario [ini] [fim]  Calendário FPT (default: hoje -> domingo)
-  fim-de-semana        Rotina completa: dados + calendário + odds API + stakes
-  agendar              Instala tarefa Windows (sabado 07:00)
+  fim-de-semana        Rotina completa (somente GitHub Actions)
   merge                Consolida em data/merged/
   jogos [data]         Jogos do dia
   operacao [data]      Relatório clássico
@@ -117,15 +116,15 @@ def cmd_calendario(args):
 
 
 def cmd_fim_de_semana(args):
+    from fpt.storage import is_github_actions
+
+    if not is_github_actions():
+        print("Rotina semanal roda apenas no GitHub Actions.")
+        print("Dispare: https://github.com/fmaiaaa/FutPythonTraderBR/actions → Relatorio Semanal Sabado")
+        sys.exit(1)
     no_train = "--no-train" in args
     no_odds = "--no-odds-api" in args
     run_weekend_pipeline(retrain=not no_train, use_odds_api=not no_odds)
-
-
-def cmd_agendar(_):
-    import subprocess
-    ps1 = Path(__file__).parent / "scripts" / "install_schedule.ps1"
-    subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(ps1)], check=True)
 
 
 def cmd_merge(_):
@@ -338,7 +337,6 @@ COMMANDS = {
     "download-weekly": cmd_download_weekly,
     "calendario": cmd_calendario,
     "fim-de-semana": cmd_fim_de_semana,
-    "agendar": cmd_agendar,
     "merge": cmd_merge,
     "jogos": cmd_jogos,
     "operacao": cmd_operacao,

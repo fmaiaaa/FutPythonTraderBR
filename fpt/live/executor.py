@@ -8,6 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from ..client import DATA
+from ..storage import persist_data_locally
 from ..integrations.betfair import get_betfair_client
 from ..trading.config import load_config as load_trading_config
 from .config import load_live_config
@@ -43,6 +44,8 @@ class BetfairExecutor:
         return bool(self.exec_cfg.get("paper_mode", True))
 
     def _log(self, payload: dict) -> None:
+        if not persist_data_locally():
+            return
         EXEC_LOG.parent.mkdir(parents=True, exist_ok=True)
         payload["logged_at"] = datetime.now(BR).isoformat(timespec="seconds")
         with EXEC_LOG.open("a", encoding="utf-8") as f:

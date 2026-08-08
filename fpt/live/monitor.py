@@ -12,6 +12,7 @@ from ..client import DATA
 from ..downloader import fetch_jogos_do_dia
 from ..leagues import filter_watchlist, watchlist_label
 from ..pipeline import load_merged
+from ..storage import persist_data_locally
 from ..trading.market_betfair import BetfairMarket, parsed_to_market_odds
 from ..trading.market_sim import SimulatedMarket
 from .config import load_live_config
@@ -82,6 +83,8 @@ class LiveMonitor:
         return fresh
 
     def _persist_alerts(self, alerts: list[LiveAlert]):
+        if not persist_data_locally():
+            return
         today = date.today().isoformat()
         out_dir = DATA / "live" / today[:7]
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -254,6 +257,8 @@ class LiveMonitor:
         return states
 
     def _persist_snapshot(self, states: list[LiveMatchState]):
+        if not persist_data_locally():
+            return
         today = date.today().isoformat()
         out_dir = DATA / "live" / today[:7]
         out_dir.mkdir(parents=True, exist_ok=True)

@@ -55,6 +55,15 @@ def apply_streamlit_secrets() -> None:
             os.environ[f"{prefix}_{k.upper()}"] = str(v)
             if section == "betfair":
                 os.environ[f"BETFAIR_{k.upper()}"] = str(v)
+            if section == "google":
+                oauth_map = {
+                    "OAUTH_CLIENT_ID": "GOOGLE_OAUTH_CLIENT_ID",
+                    "OAUTH_CLIENT_SECRET": "GOOGLE_OAUTH_CLIENT_SECRET",
+                    "OAUTH_REFRESH_TOKEN": "GOOGLE_OAUTH_REFRESH_TOKEN",
+                    "DRIVE_FOLDER_ID": "GOOGLE_DRIVE_FOLDER_ID",
+                }
+                if k.upper() in oauth_map:
+                    os.environ[oauth_map[k.upper()]] = str(v)
 
     # Certificados PEM inline (Streamlit Cloud não tem pasta certs/)
     cert_pem = secrets.get("BETFAIR_CERT_PEM") or secrets.get("betfair", {}).get("cert_pem", "")
@@ -84,6 +93,29 @@ def _download_models_zip(url: str) -> bool:
         return False
 
 
+def _download_models_from_drive(file_id: str) -> bool:
+    try:
+        from googleapiclient.http import MediaIoBaseDownload
+        from ..integrations.google_drive import _build_drive_service
+
+        service, _ = _build_drive_service()
+        if not service:
+            return False
+        MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        buf = BytesIO()
+        request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+        downloader = MediaIoBaseDownload(buf, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        buf.seek(0)
+        with zipfile.ZipFile(buf) as zf:
+            zf.extractall(MODEL_DIR)
+        return (MODEL_DIR / "model_outcome.joblib").exists()
+    except Exception:
+        return False
+
+
 def ensure_data_and_models(progress=None) -> tuple[bool, str]:
     """
     Garante merged + modelos. Retorna (ok, mensagem).
@@ -101,6 +133,16 @@ def ensure_data_and_models(progress=None) -> tuple[bool, str]:
 
     secrets = _secrets_dict()
     models_url = secrets.get("MODELS_ZIP_URL") or secrets.get("models_zip_url", "")
+    google_block = secrets.get("google")
+    models_drive_id = ""
+    if isinstance(google_block, dict):
+        models_drive_id = str(google_block.get("models_drive_file_id", "") or "")
+    models_drive_id = models_drive_id or str(secrets.get("MODELS_DRIVE_FILE_ID") or secrets.get("models_drive_file_id") or "")
+
+    if not has_models and models_drive_id:
+        log("Baixando modelos do Google Drive...")
+        if _download_models_from_drive(str(models_drive_id)):
+            has_models = True
 
     if not has_models and models_url:
         log("Baixando modelos pré-treinados...")

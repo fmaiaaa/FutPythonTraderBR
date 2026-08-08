@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from ..client import DATA
+from ..storage import persist_data_locally
 from .models import LiveMatchState
 
 BR = ZoneInfo("America/Sao_Paulo")
@@ -101,7 +102,7 @@ def state_to_row(state: LiveMatchState, ts: datetime | None = None) -> dict:
 
 def log_states(states: list[LiveMatchState], ts: datetime | None = None) -> Path | None:
     """Append ticks de todos os jogos monitorados ao CSV diário."""
-    if not states:
+    if not states or not persist_data_locally():
         return None
     ts = ts or datetime.now(BR)
     path = _daily_csv_path(ts.date())
@@ -161,6 +162,8 @@ def load_ticks(
 
 def export_daily_workbook(d: date | None = None) -> Path | None:
     """Exporta CSV diário + resumo por jogo para Excel (.xlsx)."""
+    if not persist_data_locally():
+        return None
     d = d or date.today()
     csv_path = _daily_csv_path(d)
     if not csv_path.exists():

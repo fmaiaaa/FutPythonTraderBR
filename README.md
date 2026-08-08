@@ -117,38 +117,26 @@ f* = (b×p - q) / b     onde b = odd_efetiva - 1, p = P(lucro no HT)
 stake = min(¼ × f* × confiança, 1% banca)
 ```
 
-## Rotina semanal (sábado + domingo)
+## Rotina semanal (sábado + domingo) — **somente GitHub Actions**
 
 **Watchlist (13 competições):** Série A/B, Copa do Brasil, Libertadores, Sul-Americana, LaLiga, Serie A ITA, Eredivisie, Bundesliga, Ligue 1, Liga Portugal, Premier League, Primera Nacional.
 
-Todo **sábado às 07:00** — gera PDF com **todos os mercados FPT** (1X2 HT/FT, O/U, BTTS, dupla chance): probabilidade, odd justa, φ, odd mínima e stake. **Sem filtro por odd atual** (modo referência para acompanhar o mercado).
+Todo **sábado às 07:00 BRT** o workflow gera PDFs, envia ao **Google Drive** e publica artefatos no GitHub:
 
-```bash
-python main.py fim-de-semana    # rotina completa
-python main.py calendario       # só jogos da watchlist
-python main.py agendar          # tarefa Windows sábado 07:00
-```
+- **Workflow:** [.github/workflows/weekend-saturday.yml](.github/workflows/weekend-saturday.yml) — cron `0 10 * * 6` (07:00 BRT)
+- **Disparo manual:** [GitHub Actions](https://github.com/fmaiaaa/FutPythonTraderBR/actions) → *Relatorio Semanal Sabado*
+- **PDFs:** pasta `FutPythonTraderBR` no Drive (`GOOGLE_DRIVE_FOLDER_ID`)
+- **Modelos ML:** `models/fpt-models-latest.zip` no Drive (para Streamlit Cloud)
 
-- **Windows:** tarefa `FutPythonTrader-Weekend` (sábado 07:00)
-- **GitHub Actions:** [weekend-saturday.yml](.github/workflows/weekend-saturday.yml) — cron `0 10 * * 6` (07:00 BRT)
-- **PDF:** `data/weekend/YYYY-MM/YYYY-MM-DD/*.pdf` (um por campeonato)
-- **Google Drive:** pasta `FutPythonTrader-Semanal` — **obrigatório** `GOOGLE_DRIVE_FOLDER_ID` + compartilhar com SA — ver [docs/GOOGLE_DRIVE_SETUP.md](docs/GOOGLE_DRIVE_SETUP.md)
+> **Não use agendador local** — `python main.py fim-de-semana` está bloqueado fora do CI.
 
-## Operação Live (Streamlit)
+## Operação Live (Streamlit Cloud)
 
-Monitor in-time sábado/domingo: placares Betfair, odds back/lay, alertas ML, PDFs para download.
+Monitor in-time sábado/domingo: placares Betfair, odds back/lay, alertas ML, PDFs via **Google Drive**.
 
-```bash
-python main.py live              # abre painel
-python main.py live scan         # scan terminal
-RODAR-LIVE.bat
-```
+**Deploy:** [share.streamlit.io](https://share.streamlit.io) → `streamlit_app.py` — veja [docs/STREAMLIT_CLOUD.md](docs/STREAMLIT_CLOUD.md)
 
-**Deploy online (Streamlit Cloud):**
-
-1. Push do repo para GitHub (entry point: `streamlit_app.py`)
-2. [share.streamlit.io](https://share.streamlit.io) → New app → repo `fmaiaaa/FutPythonTraderBR`
-3. Secrets: `FPT_API_KEY`, `BETFAIR_USERNAME`, `BETFAIR_PASSWORD`, `BETFAIR_APP_KEY`, certificados Betfair (base64 ou paths)
+Secrets: `FPT_API_KEY`, `[google].oauth_*`, `[betfair].*` — copie de `.streamlit/secrets.toml.example`
 
 Repositório: https://github.com/fmaiaaa/FutPythonTraderBR
 

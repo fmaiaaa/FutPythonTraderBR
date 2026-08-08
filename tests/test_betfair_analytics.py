@@ -69,6 +69,7 @@ def test_state_to_row_has_all_columns():
 def test_log_states_creates_csv(tmp_path, monkeypatch):
     import fpt.live.betfair_logger as bl
 
+    monkeypatch.setenv("FPT_PERSIST_LOCAL", "1")
     monkeypatch.setattr(bl, "TICKS_ROOT", tmp_path)
     ts = datetime(2026, 8, 8, 16, 0, tzinfo=BR)
     path = log_states([_sample_state()], ts=ts)
@@ -82,6 +83,7 @@ def test_log_states_creates_csv(tmp_path, monkeypatch):
 def test_load_ticks_filter(tmp_path, monkeypatch):
     import fpt.live.betfair_logger as bl
 
+    monkeypatch.setenv("FPT_PERSIST_LOCAL", "1")
     monkeypatch.setattr(bl, "TICKS_ROOT", tmp_path)
     ts = datetime(2026, 8, 8, 16, 0, tzinfo=BR)
     log_states([_sample_state(), _sample_state(home="Santos", away="Corinthians")], ts=ts)
@@ -92,6 +94,7 @@ def test_load_ticks_filter(tmp_path, monkeypatch):
 def test_export_daily_workbook(tmp_path, monkeypatch):
     import fpt.live.betfair_logger as bl
 
+    monkeypatch.setenv("FPT_PERSIST_LOCAL", "1")
     monkeypatch.setattr(bl, "TICKS_ROOT", tmp_path)
     ts = datetime(2026, 8, 8, 16, 0, tzinfo=BR)
     log_states([_sample_state()] * 3, ts=ts)
