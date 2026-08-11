@@ -120,7 +120,30 @@ class ModelPredictor:
         proba = self.outcome_model.predict_proba(X)[0]
         p_h, p_d, p_a = float(proba[0]), float(proba[1]), float(proba[2])
 
-        shrink = load_model_config().get("prediction", {}).get("shrinkage_to_market", 0.35)
+        cfg = load_model_config()
+        hier = cfg.get("hierarchical", {})
+        l_ht = None
+        proba_ht_l = None
+        if hier.get("enabled", True) and league_slug:
+            from .hierarchical import blend_probs, blend_weight, league_n_samples, load_league_models
+
+            l_out, l_ht, l_feats = load_league_models(league_slug)
+            if l_out is not None and l_feats:
+                Xl = pd.DataFrame([feats]).reindex(columns=l_feats, fill_value=0)
+                lp = l_out.predict_proba(Xl)[0]
+                w = blend_weight(league_slug, league_n_samples(league_slug), cfg)
+                if w > 0:
+                    p_h, p_d, p_a = blend_probs((p_h, p_d, p_a), (float(lp[0]), float(lp[1]), float(lp[2])), w)
+                if l_ht is not None:
+                    proba_ht_l = l_ht.predict_proba(Xl)[0]
+                else:
+                    proba_ht_l = None
+            else:
+                proba_ht_l = None
+        else:
+            proba_ht_l = None
+
+        shrink = cfg.get("prediction", {}).get("shrinkage_to_market", 0.35)
         if market_odds and market_odds.get("bf_back_home"):
             shrink = min(0.55, shrink + 0.10)
         p_h, p_d, p_a = apply_probability_shrinkage(p_h, p_d, p_a, market_odds, shrink=shrink)
@@ -136,6 +159,15 @@ class ModelPredictor:
         else:
             idx = classes.index(1) if 1 in classes else 1
             p_ht = float(proba_ht[idx])
+        if proba_ht_l is not None:
+            classes_l = list(l_ht.classes_)  # type: ignore[name-defined]
+            if len(proba_ht_l) == 1:
+                p_ht_l = float(proba_ht_l[0]) if classes_l[0] == 1 else 1.0 - float(proba_ht_l[0])
+            else:
+                idx_l = classes_l.index(1) if 1 in classes_l else 1
+                p_ht_l = float(proba_ht_l[idx_l])
+            w_ht = blend_weight(league_slug, league_n_samples(league_slug), cfg) if league_slug else 0
+            p_ht = (1 - w_ht) * p_ht + w_ht * p_ht_l
         p_ht = calibrated_probability(p_ht, "ht_trade")
 
         phi = dynamic_phi(cal_sel, "outcome")

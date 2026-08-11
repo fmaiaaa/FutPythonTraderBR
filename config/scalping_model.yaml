@@ -1,0 +1,42 @@
+# Modelo ML de scalping — treinado sobre coleta semanal live
+
+scalping_model:
+  min_ticks: 200
+  min_weeks: 1
+  forward_seconds: 30
+  test_fraction: 0.25
+  target: profitable_30s  # scalp BACK/LAY lucrativo em +30s
+
+  features:
+    - back_home
+    - lay_home
+    - elapsed_min
+    - ss_possession_home
+    - ss_possession_away
+    - ss_shots_home
+    - ss_shots_away
+    - ss_sot_home
+    - ss_sot_away
+    - ss_xg_home
+    - ss_xg_away
+    - ss_corners_home
+    - ss_corners_away
+    - ss_pressure_home
+    - ss_pressure_away
+    - ss_graph_momentum
+    - pressure_delta_home
+    - pressure_delta_away
+    - odd_move_home_pct
+
+  classifier:
+    max_iter: 200
+    learning_rate: 0.05
+    max_depth: 5
+    min_samples_leaf: 20
+
+collection:
+  interval_seconds: 60
+  default_duration_minutes: 300
+  fetch_lineups_once: true
+  fetch_shotmap: true
+  fetch_incidents: true

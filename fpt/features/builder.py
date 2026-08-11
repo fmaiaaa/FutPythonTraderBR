@@ -334,6 +334,7 @@ class FeatureBuilder:
 
 
 _fb_cache: dict[int, "FeatureBuilder"] = {}
+_fb_by_cutoff: dict[tuple[int, str], "FeatureBuilder"] = {}
 
 
 def get_feature_builder(df: pd.DataFrame) -> "FeatureBuilder":
@@ -351,8 +352,29 @@ def get_feature_builder(df: pd.DataFrame) -> "FeatureBuilder":
     return _fb_cache[key]
 
 
+def _feature_builder_for_cutoff(df: pd.DataFrame, match_date: str | None) -> tuple["FeatureBuilder", pd.DataFrame]:
+    """FeatureBuilder cacheado por (dataframe, data de corte) — scan live usa o mesmo histórico."""
+    md_key = str(match_date or "")
+    cache_key = (id(df), md_key)
+    dt_series = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
+    if match_date:
+        hist = df.loc[dt_series < pd.to_datetime(match_date)]
+    else:
+        hist = df
+    if cache_key not in _fb_by_cutoff:
+        h = hist.copy()
+        h["_dt"] = pd.to_datetime(h["Date"], errors="coerce", dayfirst=True)
+        h = h.sort_values("_dt").reset_index(drop=True)
+        fb = FeatureBuilder(h)
+        for _, r in h.iterrows():
+            fb.update_states(r)
+        _fb_by_cutoff[cache_key] = fb
+    return _fb_by_cutoff[cache_key], hist
+
+
 def clear_feature_cache():
     _fb_cache.clear()
+    _fb_by_cutoff.clear()
 
 
 def build_single_match_features(
@@ -364,17 +386,12 @@ def build_single_match_features(
     market_odds: dict | None = None,
 ) -> tuple[dict[str, float], list[str]]:
     """Features para um jogo futuro (todos os dados anteriores à data)."""
-    df = df.copy()
-    df["_dt"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
-    if match_date:
-        cutoff = pd.to_datetime(match_date)
-        hist = df[df["_dt"] < cutoff]
-    else:
-        hist = df
+    fb, hist = _feature_builder_for_cutoff(df, match_date)
+    dt_series = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
 
     pseudo = {
         "Home": home, "Away": away,
-        "Date": match_date or df["_dt"].max(),
+        "Date": match_date or dt_series.max(),
         "League_Slug": league_slug,
     }
     if market_odds:
@@ -389,7 +406,6 @@ def build_single_match_features(
                 if c in hist.columns:
                     pseudo[c] = hist.loc[mask].iloc[-1][c]
 
-    fb = get_feature_builder(hist if len(hist) else df)
     row = pd.Series(pseudo)
     feats = fb.build_row_features(row, hist if len(hist) else df)
     notes = feats.pop("_schedule_notes", [])

@@ -45,6 +45,21 @@ COLUMNS = [
     "best_action",
     "best_market",
     "confidence",
+    "sofascore_event_id",
+    "ss_minute",
+    "ss_possession_home",
+    "ss_possession_away",
+    "ss_shots_home",
+    "ss_shots_away",
+    "ss_sot_home",
+    "ss_sot_away",
+    "ss_xg_home",
+    "ss_xg_away",
+    "ss_corners_home",
+    "ss_corners_away",
+    "ss_pressure_home",
+    "ss_pressure_away",
+    "ss_graph_momentum",
 ]
 
 
@@ -67,7 +82,7 @@ def _match_key(home: str, away: str) -> str:
 def state_to_row(state: LiveMatchState, ts: datetime | None = None) -> dict:
     ts = ts or datetime.now(BR)
     odds = state.odds or {}
-    return {
+    row = {
         "timestamp": ts.isoformat(timespec="seconds"),
         "date": ts.date().isoformat(),
         "time": ts.strftime("%H:%M:%S"),
@@ -97,7 +112,15 @@ def state_to_row(state: LiveMatchState, ts: datetime | None = None) -> dict:
         "best_action": state.best_action,
         "best_market": state.best_market,
         "confidence": state.confidence,
+        "sofascore_event_id": state.sofascore_event_id,
     }
+    ss = state.sofascore_stats or {}
+    for col in COLUMNS:
+        if col not in row and col in ss:
+            row[col] = ss[col]
+        elif col.startswith("ss_") and col not in row:
+            row[col] = None
+    return row
 
 
 def log_states(states: list[LiveMatchState], ts: datetime | None = None) -> Path | None:

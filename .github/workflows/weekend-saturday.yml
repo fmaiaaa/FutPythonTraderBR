@@ -37,8 +37,10 @@ jobs:
             data/models
             data/merged
             data/raw
-          key: fpt-data-${{ hashFiles('fpt/catalog.json', 'fpt/leagues.py', 'config/models.yaml') }}-v3
+            data/live_collection
+          key: fpt-data-${{ hashFiles('fpt/catalog.json', 'fpt/leagues.py', 'config/models.yaml') }}-v4
           restore-keys: |
+            fpt-live-collection-
             fpt-data-
 
       - name: Configurar secrets
@@ -89,6 +91,16 @@ jobs:
       - name: Rotina fim de semana (sabado + domingo)
         run: python main.py fim-de-semana --no-train
 
+      - name: Treino scalping + upload base live (se coleta existir)
+        env:
+          DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+        run: |
+          if [ -d data/live_collection ] && [ "$(find data/live_collection -name '*.csv' | head -1)" ]; then
+            python scripts/finalize_weekly_collection.py --upload-drive || true
+          else
+            echo "Sem coleta live acumulada — pulando treino scalping"
+          fi
+
       - name: Localizar pasta do relatorio
         id: paths
         run: |
@@ -115,7 +127,10 @@ jobs:
           REPORT_DIR: ${{ steps.paths.outputs.report_dir }}
         run: |
           SAT=$(basename "$REPORT_DIR")
+          echo "PDFs a enviar:"
+          find "$REPORT_DIR" -name '*.pdf' | sort
           python scripts/upload_weekend_drive.py --dir "$REPORT_DIR" --date "$SAT"
+          echo "Esperados: ModeloEval (stakes), Receita_PreLive/Scalping/Combinado, PDFs por liga"
 
       - name: Upload artefatos GitHub
         uses: actions/upload-artifact@v4

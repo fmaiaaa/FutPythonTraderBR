@@ -284,7 +284,11 @@ def upload_models_bundle(models_dir: Path | None = None) -> dict | None:
 
     models_dir = models_dir or (DATA / "models")
     joblib_files = list(models_dir.glob("*.joblib"))
+    scalping_dir = models_dir / "scalping"
+    if scalping_dir.is_dir():
+        joblib_files.extend(scalping_dir.glob("*.joblib"))
     meta = models_dir / "meta.json"
+    scalp_meta = scalping_dir / "meta.json" if scalping_dir.is_dir() else None
     if not joblib_files:
         return None
 
@@ -299,9 +303,12 @@ def upload_models_bundle(models_dir: Path | None = None) -> dict | None:
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in joblib_files:
-            zf.write(p, p.name)
+            arc = p.relative_to(models_dir).as_posix()
+            zf.write(p, arc)
         if meta.exists():
             zf.write(meta, meta.name)
+        if scalp_meta and scalp_meta.exists():
+            zf.write(scalp_meta, f"scalping/{scalp_meta.name}")
     buf.seek(0)
 
     media = MediaIoBaseUpload(buf, mimetype="application/zip", resumable=False)
@@ -444,6 +451,129 @@ def upload_merged_bundle(merged_dir: Path | None = None) -> dict | None:
         body=body, media_body=media, fields="id,webViewLink", supportsAllDrives=True,
     ).execute()
     return {"file_id": created["id"], "web_view_link": created.get("webViewLink"), "name": MERGED_ZIP_NAME}
+
+
+LIVE_COLLECTION_ZIP = "fpt-live-collection-latest.zip"
+LIVE_SNAPSHOT_NAME = "fpt-live-snapshot-latest.json"
+LIVE_PULSE_NAME = "fpt-live-pulse-latest.json"
+
+
+def _upload_json_asset(name: str, payload: dict) -> dict | None:
+    from googleapiclient.http import MediaIoBaseUpload
+    from io import BytesIO
+
+    service, _ = _build_drive_service()
+    if not service:
+        return None
+    root = get_root_folder_id(service)
+    if not root:
+        return None
+    assets_folder = _find_or_create_folder(service, root, DRIVE_ASSETS_FOLDER)
+    raw = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+    media = MediaIoBaseUpload(BytesIO(raw), mimetype="application/json", resumable=False)
+    q = f"name='{name}' and '{assets_folder}' in parents and trashed=false"
+    existing = service.files().list(q=q, fields="files(id)", supportsAllDrives=True).execute().get("files", [])
+    body = {"name": name, "parents": [assets_folder]}
+    if existing:
+        updated = service.files().update(
+            fileId=existing[0]["id"], media_body=media, fields="id,webViewLink", supportsAllDrives=True,
+        ).execute()
+        return {"file_id": updated["id"], "web_view_link": updated.get("webViewLink"), "name": name}
+    created = service.files().create(
+        body=body, media_body=media, fields="id,webViewLink", supportsAllDrives=True,
+    ).execute()
+    return {"file_id": created["id"], "web_view_link": created.get("webViewLink"), "name": name}
+
+
+def upload_live_snapshot_bundle(snapshot_path: Path | None = None) -> dict | None:
+    """Publica snapshot live do dia no Drive (consulta 24h / Streamlit Cloud)."""
+    from datetime import date
+
+    today = date.today().isoformat()
+    path = snapshot_path or (DATA / "live" / today[:7] / f"snapshot_{today}.json")
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    payload["cloud_uploaded"] = __import__("datetime").datetime.now().isoformat(timespec="seconds")
+    result = _upload_json_asset(LIVE_SNAPSHOT_NAME, payload)
+    if result:
+        from ..live.cloud_pulse import read_cloud_pulse
+
+        pulse = read_cloud_pulse()
+        if pulse:
+            _upload_json_asset(LIVE_PULSE_NAME, pulse)
+    return result
+
+
+def download_live_snapshot_from_drive() -> bool:
+    """Baixa snapshot live mais recente do Drive para data/live/."""
+    from datetime import date
+
+    asset = find_drive_asset(LIVE_SNAPSHOT_NAME)
+    if not asset:
+        return False
+    raw = _download_drive_file_bytes(asset["file_id"])
+    if not raw:
+        return False
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    today = date.today().isoformat()
+    out_dir = DATA / "live" / today[:7]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"snapshot_{today}.json"
+    out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return True
+
+
+def upload_live_collection_bundle(collection_dir: Path | None = None) -> dict | None:
+    """Zip data/live_collection/ → Drive/models/fpt-live-collection-latest.zip"""
+    import zipfile
+    from io import BytesIO
+    from googleapiclient.http import MediaIoBaseUpload
+
+    collection_dir = collection_dir or (DATA / "live_collection")
+    if not collection_dir.exists():
+        return None
+
+    files: list[Path] = []
+    for pat in ("**/*.csv", "**/*.json", "**/*.parquet", "**/*.jsonl"):
+        files.extend(collection_dir.glob(pat))
+    if not files:
+        return None
+
+    service, _ = _build_drive_service()
+    if not service:
+        return None
+    root = get_root_folder_id(service)
+    if not root:
+        return None
+
+    assets_folder = _find_or_create_folder(service, root, DRIVE_ASSETS_FOLDER)
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in files:
+            arc = p.relative_to(collection_dir).as_posix()
+            zf.write(p, arc)
+    buf.seek(0)
+
+    media = MediaIoBaseUpload(buf, mimetype="application/zip", resumable=False)
+    q = f"name='{LIVE_COLLECTION_ZIP}' and '{assets_folder}' in parents and trashed=false"
+    existing = service.files().list(q=q, fields="files(id)", supportsAllDrives=True).execute().get("files", [])
+    body = {"name": LIVE_COLLECTION_ZIP, "parents": [assets_folder]}
+    if existing:
+        updated = service.files().update(
+            fileId=existing[0]["id"], media_body=media, fields="id,webViewLink", supportsAllDrives=True,
+        ).execute()
+        return {"file_id": updated["id"], "web_view_link": updated.get("webViewLink"), "name": LIVE_COLLECTION_ZIP}
+    created = service.files().create(
+        body=body, media_body=media, fields="id,webViewLink", supportsAllDrives=True,
+    ).execute()
+    return {"file_id": created["id"], "web_view_link": created.get("webViewLink"), "name": LIVE_COLLECTION_ZIP}
 
 
 def get_root_folder_id(service) -> str | None:

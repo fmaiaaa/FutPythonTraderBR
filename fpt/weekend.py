@@ -236,49 +236,82 @@ def run_weekend_pipeline(
     out_json.write_text(json.dumps({"meta": meta, "entries": entries}, indent=2, default=str), encoding="utf-8")
     pd.DataFrame(entries).to_csv(out_txt.with_suffix(".csv"), index=False, encoding="utf-8-sig")
 
-    print("\n[7/7] Gerando PDFs por campeonato e Google Drive...")
+    print("\n[7/7] Gerando PDFs por campeonato...")
     from .report.pdf_weekend import generate_weekend_pdfs_by_league
-    from .integrations.google_drive import upload_file, upload_weekend_folder
+    from .integrations.google_drive import upload_weekend_folder
 
     for old_pdf in out_dir.glob("*.pdf"):
         old_pdf.unlink(missing_ok=True)
 
-    pdf_paths = generate_weekend_pdfs_by_league(entries, meta, out_dir)
+    pdf_paths = list(generate_weekend_pdfs_by_league(entries, meta, out_dir))
+
+    print("\n[7b/7] PDF avaliacao do modelo (stakes 0,2%–10% + Kelly)...")
+    try:
+        from .models.evaluate import evaluate_holdout, save_evaluation
+        from .report.pdf_model_eval import generate_model_eval_pdf
+        eval_result = evaluate_holdout(hist)
+        save_evaluation(eval_result)
+        eval_pdf = out_dir / f"ModeloEval_{start}.pdf"
+        meta_train = meta.get("train") or {}
+        meta_path = DATA / "models" / "meta.json"
+        if not meta_train and meta_path.exists():
+            meta_train = json.loads(meta_path.read_text(encoding="utf-8"))
+        generate_model_eval_pdf(eval_result, eval_pdf, meta=meta_train)
+        pdf_paths.append(eval_pdf)
+        meta["model_eval_pdf"] = str(eval_pdf)
+    except Exception as ex:
+        print(f"  aviso ModeloEval: {ex}")
+
+    print("\n[7c/7] PDFs evolução da receita (pré-live, scalping, combinado)...")
+    from .report.pdf_revenue import generate_revenue_evolution_pdfs
+
+    try:
+        revenue_pdfs = generate_revenue_evolution_pdfs(hist, out_dir, str(start))
+        pdf_paths.extend(revenue_pdfs)
+        meta["revenue_pdf_paths"] = [str(p) for p in revenue_pdfs]
+    except Exception as ex:
+        print(f"  aviso PDFs receita: {ex}")
+        meta["revenue_pdf_paths"] = []
+
+    print("\n[7d/7] Upload Google Drive (todos os PDFs)...")
     drive_manifest = upload_weekend_folder(out_dir, str(start))
     drive_ids = [u["file_id"] for u in drive_manifest.get("uploaded", []) if u.get("file_id")]
 
     from .storage import is_github_actions
     if is_github_actions():
-        from .integrations.google_drive import upload_models_bundle, upload_merged_bundle
+        from .integrations.google_drive import upload_models_bundle, upload_merged_bundle, upload_live_collection_bundle
         models_info = upload_models_bundle()
         merged_info = upload_merged_bundle()
+        collection_info = upload_live_collection_bundle()
         if models_info:
             meta.setdefault("models_drive", models_info)
             print(f"Modelos no Drive: {models_info.get('web_view_link', models_info.get('file_id'))}")
         if merged_info:
             meta.setdefault("merged_drive", merged_info)
             print(f"Dados merged no Drive: {merged_info.get('web_view_link', merged_info.get('file_id'))}")
+        if collection_info:
+            meta.setdefault("live_collection_drive", collection_info)
+            print(f"Coleta live no Drive: {collection_info.get('web_view_link', collection_info.get('file_id'))}")
     meta["pdf_paths"] = [str(p) for p in pdf_paths]
     meta["drive_file_ids"] = drive_ids
     meta["drive_links"] = drive_manifest.get("uploaded", [])
     meta["drive_manifest"] = str(out_dir / "drive_links.json")
     drive_id = drive_ids[0] if drive_ids else None
 
-    if retrain and meta.get("train"):
-        print("\n[7b/7] PDF avaliacao do modelo...")
-        from .models.evaluate import evaluate_holdout, save_evaluation
-        from .report.pdf_model_eval import generate_model_eval_pdf
-        eval_result = evaluate_holdout(hist)
-        save_evaluation(eval_result)
-        eval_pdf = out_dir / f"ModeloEval_{start}.pdf"
-        generate_model_eval_pdf(eval_result, eval_pdf, meta=meta["train"])
-        upload_file(eval_pdf, history_date=str(start))
-        meta["model_eval_pdf"] = str(eval_pdf)
+    print("\n[7e/7] Treino modelo scalping (coleta semanal)...")
+    try:
+        from .live.dataset_builder import build_weekly_scalping_dataset
+        from .models.train_scalping import train_scalping_model
+        scalp_df = build_weekly_scalping_dataset(days_back=14)
+        meta["scalping_train"] = train_scalping_model(scalp_df if not scalp_df.empty else None)
+    except Exception as ex:
+        print(f"  aviso treino scalping: {ex}")
+        meta["scalping_train"] = {"status": "error", "message": str(ex)}
     meta["pdf_path"] = meta.get("pdf_paths", [str(out_pdf)])[0] if meta.get("pdf_paths") else str(out_pdf)
     meta["drive_file_id"] = drive_id
 
     print(report)
-    print(f"\nSalvo: {out_txt} | PDFs: {len(meta.get('pdf_paths', []))} campeonatos")
+    print(f"\nSalvo: {out_txt} | PDFs totais: {len(meta.get('pdf_paths', []))}")
     return {
         "meta": meta, "entries": entries, "report_path": str(out_txt),
         "pdf_path": meta.get("pdf_path"), "pdf_paths": meta.get("pdf_paths", []),

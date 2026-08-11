@@ -3,9 +3,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "data"
-ENV_PATH = ROOT / ".env"
+from .paths import ENV_PATH, ROOT, data_root, ensure_data_dirs
+
+DATA = data_root()
+ensure_data_dirs()
 
 BASE_URL = "https://futpythontrader.com.br/api/download"
 JOGOS_URL = "https://futpythontrader.com.br/api/jogos-do-dia"

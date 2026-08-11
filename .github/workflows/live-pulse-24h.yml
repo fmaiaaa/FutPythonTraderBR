@@ -1,0 +1,128 @@
+name: Pulse Live 24h
+
+on:
+  schedule:
+    # A cada 15 min — consulta contínua (UTC)
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Perfil de operação"
+        required: false
+        default: robust
+        type: choice
+        options:
+          - robust
+          - watchlist
+
+env:
+  PYTHONUNBUFFERED: "1"
+  TZ: America/Sao_Paulo
+  FPT_PERSIST_LOCAL: "1"
+  GITHUB_ACTIONS: "true"
+  FPT_PROFILE: ${{ github.event.inputs.profile || 'robust' }}
+  FPT_API_KEY: ${{ secrets.FPT_API_KEY }}
+
+jobs:
+  cloud-pulse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Preparar diretorios
+        run: mkdir -p data/{raw,merged,models,live,betfair/ticks,sofascore} credentials certs
+
+      - name: Restaurar cache dados merged
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/merged
+            data/models
+          key: fpt-merged-models-${{ github.run_number }}
+          restore-keys: |
+            fpt-merged-models-
+            fpt-data-
+
+      - name: Configurar secrets (FPT + Drive + Betfair)
+        env:
+          FPT_KEY: ${{ secrets.FPT_API_KEY }}
+          OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          OAUTH_REFRESH: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GSA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          BF_USER: ${{ secrets.BETFAIR_USERNAME }}
+          BF_PASS: ${{ secrets.BETFAIR_PASSWORD }}
+          BF_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BF_CERT: ${{ secrets.BETFAIR_CERT_PEM }}
+          BF_KEY_PEM: ${{ secrets.BETFAIR_KEY_PEM }}
+        run: |
+          cat > .env <<EOF
+          FPT_API_KEY=${FPT_KEY}
+          LOG_LEVEL=INFO
+          EOF
+          export GOOGLE_DRIVE_FOLDER_ID="$DRIVE_FOLDER_ID"
+          export GOOGLE_OAUTH_CLIENT_ID="$OAUTH_CLIENT_ID"
+          export GOOGLE_OAUTH_CLIENT_SECRET="$OAUTH_CLIENT_SECRET"
+          export GOOGLE_OAUTH_REFRESH_TOKEN="$OAUTH_REFRESH"
+          export GOOGLE_SERVICE_ACCOUNT_JSON="$GSA_JSON"
+          bash scripts/github_setup_drive_env.sh || true
+          export BETFAIR_USERNAME="$BF_USER"
+          export BETFAIR_PASSWORD="$BF_PASS"
+          export BETFAIR_APP_KEY="$BF_KEY"
+          export BETFAIR_CERT_PEM="$BF_CERT"
+          export BETFAIR_KEY_PEM="$BF_KEY_PEM"
+          bash scripts/github_setup_betfair_env.sh || true
+
+      - name: Dados merged e modelos
+        run: |
+          if [ ! -f data/merged/global_all.parquet ] && [ ! -f data/merged/brazil_male_all.parquet ]; then
+            python main.py download-weekly || true
+            python -c "from fpt.downloader import merge_all; merge_all()" || true
+          fi
+          if [ ! -f data/models/model_outcome.joblib ]; then
+            python main.py treinar || python -c "
+from fpt.integrations.google_drive import find_drive_asset, download_drive_zip, MODELS_ZIP_NAME
+from pathlib import Path
+asset = find_drive_asset(MODELS_ZIP_NAME)
+if asset:
+    download_drive_zip(asset['file_id'], Path('data/models'))
+" || true
+          fi
+          python scripts/seed_robust_ranking.py
+
+      - name: Pulse live (scan + upload Drive)
+        run: python scripts/run_cloud_pulse.py --profile "${{ env.FPT_PROFILE }}"
+
+      - name: Salvar cache merged
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/merged
+            data/models
+          key: fpt-merged-models-${{ github.run_number }}
+
+      - name: Artefatos pulse
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpt-pulse-${{ github.run_id }}
+          path: |
+            data/live/**/snapshot_*.json
+            data/live/cloud_pulse.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Resumo
+        run: |
+          cat data/live/cloud_pulse.json 2>/dev/null || echo "Sem pulse local"
+          ls -la data/live/*/snapshot_*.json 2>/dev/null | tail -3 || true

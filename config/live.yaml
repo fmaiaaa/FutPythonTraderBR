@@ -1,13 +1,36 @@
-# Monitoramento live — fim de semana (sábado/domingo)
+# Monitoramento live — operação diária 24/7 (todos os dias)
+
+# Ligas: robust = watchlist tier 1 | ranked_fpt = watchlist + probation | all_fpt = todas com base
+leagues:
+  filter_mode: ranked_fpt       # robust | watchlist | all_fpt | ranked_fpt
+  require_fpt_base: true
+  ranking:
+    tier1_kelly_multiplier: 0.25   # watchlist validada
+    tier2_kelly_multiplier: 0.15
+    tier3_kelly_multiplier: 0.05   # probation — ligas novas
+    min_bets_tier1: 300
+    min_bets_tier2: 1000
+    min_bets_tier3: 3000
+
+# Pré-live: FPT + Betfair | In-live/scalping: SofaScore + Betfair
+coverage:
+  pre_live_require_fpt: true
+  pre_live_require_betfair: true
+  in_live_require_betfair: true
+  in_live_require_sofascore: true
+
+models:
+  in_live_pressure_ml: false      # pressão in-live heurística até coleta robusta
 
 live:
-  refresh_seconds: 60
+  refresh_seconds: 15
   lookback_days: 0
   lookahead_days: 1
-  bankroll: 1000.0
+  bankroll: 100.0              # banca paper inicial (R$)
   min_edge_pp: 1.0
   min_confidence: 40
-  watch_near_value_pct: 2.0    # alerta WATCH se odd a X% da mínima
+  min_p_ht_profit: 0.48    # P(lucro HT) mínimo para entrar pro-tempo
+  watch_near_value_pct: 2.0
   alert_cooldown_seconds: 300  # não repetir mesmo alerta em 5 min
   log_alerts: true
   log_betfair_ticks: true   # CSV diário em data/betfair/ticks/ para análise de estratégias
@@ -26,16 +49,235 @@ strategies:
   steam_move:
     enabled: true
     description: "Movimento forte de odd (>5%) vs último tick — revisar entrada"
+  pressure_steam:
+    enabled: true
+    description: "Scalp: spike de pressão SofaScore + steam de odd alinhados"
+    min_pressure_delta: 8.0
+    min_dominance: 12.0
+    steam_pct: 0.03
+    max_elapsed_min: 75
+    markets:
+      - home_win_ft
   betfair_enrichment:
     enabled: true
     shrinkage_boost: 0.10      # +10% shrinkage quando odds Betfair disponíveis
 
 execution:
-  enabled: false               # true para permitir ordens reais
-  paper_mode: true             # true = simula (log only); false = API Betfair
-  auto_execute: false            # false = exige aprovação no Streamlit
+  enabled: true
+  paper_mode: true              # simulação — sem dinheiro real
+  auto_execute: true
+  require_exchange: true        # sempre BACK/LAY na exchange (Betfair)
+  max_stake_pct: 0.02           # teto 2% da banca por operação
   min_stake_brl: 2.0
+
+# Banca fictícia (SQLite em data/live/paper_trading.db)
+# Timeline minuto a minuto: data/live/minute_timeline.db (banca + SofaScore/jogo)
+paper:
+  initial_bankroll: 100.0
+  max_stake_pct: 0.02
+  commission: 0.05
 
 betfair:
   prefer_over_fpt: true
   min_liquidity: 1000.0      # totalMatched mínimo para confiar
+
+# Stats live SofaScore (API não oficial — requer curl_cffi)
+sofascore:
+  enabled: true
+  fetch_all_scheduled: true    # casa todos jogos do dia (match fuzzy)
+  fetch_in_play_only: true     # stats/xG só in-play
+  enrich_full_scan: false
+  enrich_live_in_full_scan: true
+  log_snapshots: true        # JSONL em data/sofascore/snapshots/
+  timeout: 15
+  retries: 3
+  min_interval_seconds: 0.4  # rate limit (~2.5 req/s)
+
+scalping:
+  enabled: true
+  stake_pct: 0.02              # teto 2% (igual ao restante)
+  take_profit_pct: 0.015     # +1.5% na odd (BACK) ou -1.5% (LAY)
+  stop_loss_pct: 0.02        # -2% stop
+  timeout_seconds: 60        # saída forçada após 60s
+  target_horizon_seconds: 30
+  commission: 0.05           # Betfair 5%
+  auto_open_on_signal: false     # robô abre posição após ordem confirmada
+  auto_execute_scalp: true      # scalping automático
+  markets:
+    - home_win_ft
+
+# Exposição por jogo — evita entradas análogas (mesma tese, mercados diferentes)
+entry_exposure:
+  enabled: true
+  max_entries_per_match: 2       # teto de posições abertas no mesmo jogo
+  max_per_correlation_group: 1   # uma entrada por grupo (ex.: favor_home, low_goals)
+
+# Gates scalping — só entra após tendência confirmada (10'–70')
+scalping_gates:
+  enabled: true
+  min_elapsed_min: 10          # bloqueia primeiros 10' (ruído pós-apito)
+  max_elapsed_min: 70          # bloqueia após 70' (liquidez/volatilidade)
+  block_ht_window: true
+  ht_block_min: [45, 50]
+  require_trend_confirmation: true
+  require_prev_pressure: true    # exige 2 ticks — tendência sustentada
+  require_sustained_dom: true
+  require_momentum_align: true
+  require_xg_align: true
+  require_sot_align: true
+  min_dominance: 10
+  min_velocity: 5
+  min_sustain_ratio: 0.5
+  min_momentum: 5
+  min_xg_diff: 0.10
+  min_sot_diff: 0
+  min_combined_pressure: 0
+  require_steam_align: false     # estratégias steam já checam odd_move
+  require_xg_velocity: false
+
+# Pro-tempo — pré-jogo clássico vs confirmação live
+pro_tempo:
+  classic_prematch_only: true   # A1-A3 só antes do apito; live usa B/C
+
+pro_tempo_strategies:
+  # Bloco A — clássicas (modelo + φ)
+  back_draw_classic:
+    enabled: true
+  lay_1x2_classic:
+    enabled: true
+  back_under_classic:
+    enabled: true
+  # Bloco B — confirmação live
+  under_dead_game:
+    enabled: true
+    window_min: [15, 38]
+    min_implied_over25: 0.52
+    max_combined_pressure: 25
+    max_combined_xg: 0.45
+    max_goals: 1
+    markets: [under15_ht, under25_ft]
+  lay_favorite_absent:
+    enabled: true
+    window_min: [10, 40]
+    max_favorite_odd: 1.85
+    min_opposite_dominance: 12
+    max_favorite_sot: 1
+    min_opponent_sot: 2
+  lay_underdog_dead:
+    enabled: true
+    window_min: [10, 45]
+    min_favorite_dominance: 20
+    min_velocity: 5
+  back_draw_late:
+    enabled: true
+    window_min: [25, 40]
+    max_abs_dominance: 8
+    max_goals: 2
+  under_ht_conservative:
+    enabled: true
+    window_min: [28, 42]
+    max_combined_shots: 8
+    max_side_pressure: 15
+    markets: [under05_ht, under15_ht]
+  # Bloco C — fade mercado
+  fade_favorite_steam:
+    enabled: true
+    steam_pct: 0.05
+    max_support_dom: 5
+  fade_underdog_steam:
+    enabled: true
+    steam_pct: 0.05
+    min_favorite_dom: 15
+  back_under_over_cancelled:
+    enabled: true
+    window_min: [15, 38]
+    min_implied_over25: 0.52
+    max_combined_pressure: 25
+    max_combined_xg: 0.45
+    max_goals: 1
+    markets: [under15_ht, under25_ft]
+
+scalping_strategies:
+  pressure_steam:
+    enabled: true
+    min_dominance: 12
+    min_pressure_delta: 8
+    steam_pct: 0.03
+  steam_momentum:
+    enabled: true
+    steam_pct: 0.03
+    min_graph_momentum: 12
+    min_dominance: 8
+  pressure_surge:
+    enabled: true
+    min_velocity: 10
+    min_dominance: 15
+    stake_pct: 0.015
+  xg_spike:
+    enabled: true
+    min_xg_delta: 0.15
+    min_combined_xg: 0.5
+    min_dom: 8
+  dominance:
+    enabled: true
+    min_dominance: 25
+    min_prev_dominance: 20
+  fade_steam:
+    enabled: true
+    steam_pct: 0.03
+    max_support_dom: 5
+
+# Pressão live → P ajustada → odd mín/máx (φ) — gate do scalping
+pressure_odds:
+  enabled: true
+  require_pressure: true
+  blend_weight: 0.35      # peso da pressão vs modelo pré-jogo
+  xg_weight: 0.15         # reforço xG live
+  dominance_scale: 2.0
+  min_edge_pp: 0.5        # edge mínimo vs odd de mercado
+
+# Execução exchange — back/lay, spread, preços realistas
+exchange_execution:
+  enabled: true
+  use_mid_for_edge: true      # edge vs preço médio (back+lay)/2
+  require_spread_ok: true     # scalp exige TP > spread + comissão
+  scalp_min_margin_pp: 0.3
+
+# Calendário semanal — sábado busca domingo→sábado; todo dia 23h atualiza horários de amanhã
+weekly_calendar:
+  fetch_on_weekday: 5           # sábado — calendário completo da semana
+  daily_refresh_hour: 23        # todo dia às 23h (BRT)
+  daily_refresh_enabled: true
+  pre_kickoff_minutes: 5        # começa a monitorar 5 min antes
+  match_duration_minutes: 105   # ~90 min + intervalo
+  injury_extra_minutes: 15      # atrasos e acréscimos
+
+# Robô autônomo (processo CMD separado — scripts/start_operacao.bat)
+autonomous:
+  refresh_seconds: 30
+  full_scan_interval_seconds: 900   # scan completo (pré-live) a cada 15 min
+  collect_data: false
+  use_betfair_balance: false    # paper: usa banca fictícia SQLite
+  balance_reserve_pct: 0.05     # reserva 5%
+  auto_exit: true
+  exit_rules:
+    exit_at_ht: true            # saída no intervalo
+    lay_exit_on_team_goal: true # lay zebra/favorito + gol do lado = sair
+    back_draw_exit_on_goal: true
+    exit_on_any_goal: false
+    max_goals_before_exit: null # ex: 1 para estilo under 2.5 (sai no 1º gol)
+
+# Dashboard Streamlit (somente leitura — scripts/launch_robot.bat)
+dashboard:
+  refresh_seconds: 15           # poll arquivos em disco (sem scan)
+
+# Coleta minuto a minuto (processo CMD — scripts/start_coleta.bat)
+collection:
+  run_with_app: false           # não coletar dentro do Streamlit
+  record_all_watchlist: true    # legado — use record_all_fpt
+  record_all_fpt: true          # todos jogos FPT no calendário filtrado
+  interval_seconds: 60          # 1 tick/minuto
+  default_duration_minutes: 300 # sessão finita (CI); CMD usa run_forever
+  fetch_lineups_once: true
+  fetch_shotmap: true
+  fetch_incidents: true

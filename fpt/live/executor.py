@@ -10,9 +10,11 @@ from zoneinfo import ZoneInfo
 from ..client import DATA
 from ..storage import persist_data_locally
 from ..integrations.betfair import get_betfair_client
+from ..trading.exchange_odds import ExchangeQuote
 from ..trading.config import load_config as load_trading_config
 from .config import load_live_config
 from .models import LiveAlert
+from .scalping_strategies import is_scalp_entry
 
 BR = ZoneInfo("America/Sao_Paulo")
 EXEC_LOG = DATA / "live" / "executions.jsonl"
@@ -37,11 +39,30 @@ class BetfairExecutor:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.exec_cfg.get("enabled", False)) and self.client.configured
+        if not bool(self.exec_cfg.get("enabled", False)):
+            return False
+        if self.paper_mode:
+            return True
+        return self.client.configured
 
     @property
     def paper_mode(self) -> bool:
         return bool(self.exec_cfg.get("paper_mode", True))
+
+    def _max_stake_pct(self) -> float:
+        cfg = load_live_config()
+        paper = cfg.get("paper", {})
+        return float(
+            self.exec_cfg.get("max_stake_pct")
+            or paper.get("max_stake_pct")
+            or 0.02
+        )
+
+    def _paper_bankroll(self) -> float:
+        from .paper_db import get_available_bankroll, init_paper_db
+
+        init_paper_db()
+        return get_available_bankroll()
 
     def _log(self, payload: dict) -> None:
         if not persist_data_locally():
@@ -58,9 +79,10 @@ class BetfairExecutor:
         side: str = "BACK",
         bankroll: float | None = None,
         approved: bool = True,
+        stake_amount: float | None = None,
     ) -> dict:
         """
-        Executa ordem a partir de alerta ENTER/HT_EXIT.
+        Executa ordem a partir de alerta ENTER/HT_EXIT/PRESSURE_STEAM/SCALP_EXIT.
         side: BACK | LAY
         """
         if not approved:
@@ -69,30 +91,38 @@ class BetfairExecutor:
         if not self.enabled:
             return {"status": "DISABLED", "message": "Execução desabilitada em config/live.yaml"}
 
-        bankroll = bankroll or self.bankroll
+        if self.paper_mode:
+            bankroll = self._paper_bankroll()
+        else:
+            bankroll = bankroll or self.bankroll
         side = side.upper()
-        stake_pct = alert.stake_back_pct if side == "BACK" else alert.stake_lay_pct
-        price = alert.odd_back if side == "BACK" else alert.odd_lay
+        scalp_cfg = load_live_config().get("scalping", {})
+        if is_scalp_entry(alert.alert_type):
+            stake_pct = float(scalp_cfg.get("stake_pct", alert.stake_pct))
+        else:
+            stake_pct = alert.stake_back_pct if side == "BACK" else alert.stake_lay_pct
 
-        if stake_pct <= 0:
+        max_pct = self._max_stake_pct()
+        stake_pct = min(float(stake_pct), max_pct)
+
+        quote = ExchangeQuote.from_prices(alert.odd_back, alert.odd_lay)
+        price = quote.entry_price(side)
+        exit_quote_price = quote.exit_price(side)
+
+        if stake_pct <= 0 and stake_amount is None:
             return {"status": "SKIP", "message": f"Stake {side} = 0%"}
         if not price or price <= 1.01:
             return {"status": "SKIP", "message": f"Odd {side} indisponível"}
-        if not alert.market_id:
-            return {"status": "ERROR", "message": "market_id ausente"}
-        if not alert.selection_id:
-            return {"status": "ERROR", "message": "selection_id ausente — reconecte Betfair"}
+        if not self.paper_mode:
+            if not alert.market_id:
+                return {"status": "ERROR", "message": "market_id ausente"}
+            if not alert.selection_id:
+                return {"status": "ERROR", "message": "selection_id ausente — reconecte Betfair"}
 
-        stake_amount = max(round(bankroll * stake_pct, 2), _min_stake_brl())
-        if side == "LAY":
-            stake_amount = max(round(bankroll * stake_pct / (price - 1), 2), _min_stake_brl())
-        instruction = self.client.build_limit_instruction(
-            selection_id=int(alert.selection_id),
-            side=side,
-            size=stake_amount,
-            price=float(price),
-        )
-        customer_ref = f"fpt-{uuid.uuid4().hex[:12]}"
+        if stake_amount is None:
+            stake_amount = max(round(bankroll * stake_pct, 2), _min_stake_brl())
+            if side == "LAY":
+                stake_amount = max(round(bankroll * stake_pct / (price - 1), 2), _min_stake_brl())
 
         payload = {
             "alert_id": alert.alert_id,
@@ -103,6 +133,11 @@ class BetfairExecutor:
             "stake_pct": stake_pct,
             "stake_amount": stake_amount,
             "price": price,
+            "odd_back": alert.odd_back,
+            "odd_lay": alert.odd_lay,
+            "spread_pct": quote.spread_pct,
+            "exit_side": "LAY" if side == "BACK" else "BACK",
+            "exit_reference_price": exit_quote_price,
             "market_id": alert.market_id,
             "selection_id": alert.selection_id,
             "paper_mode": self.paper_mode,
@@ -110,9 +145,18 @@ class BetfairExecutor:
 
         if self.paper_mode:
             payload["status"] = "PAPER"
-            payload["message"] = f"[PAPER] {side} {stake_amount:.2f} @ {price:.2f}"
+            payload["message"] = f"[PAPER] {side} {stake_amount:.2f} @ {price:.2f} (banca disp. R$ {bankroll:.2f})"
+            payload["paper_bankroll"] = bankroll
             self._log(payload)
             return payload
+
+        instruction = self.client.build_limit_instruction(
+            selection_id=int(alert.selection_id),
+            side=side,
+            size=stake_amount,
+            price=float(price),
+        )
+        customer_ref = f"fpt-{uuid.uuid4().hex[:12]}"
 
         try:
             self.client.login()

@@ -47,3 +47,9 @@ evaluation:
   bankroll: 1000.0
   fixed_stakes_pct: [0.002, 0.005, 0.01, 0.02, 0.05, 0.10]
   min_history: 100
+
+hierarchical:
+  enabled: true
+  min_samples_per_league: 500
+  max_leagues: 40
+  league_blend_weight: 0.55    # peso do modelo específico vs global

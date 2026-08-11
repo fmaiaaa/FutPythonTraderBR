@@ -35,6 +35,10 @@ from fpt.live.models import LiveMatchState
 from fpt.live.monitor import LiveMonitor
 from fpt.live.reports import find_weekend_reports
 from fpt.live.executor import BetfairExecutor, load_recent_executions
+from fpt.live.scalping import ScalpingEngine, build_scalp_plan
+from fpt.live.scalping_strategies import is_scalp_entry
+from fpt.live.scalping_backtest import run_scalping_backtest
+from fpt.live.tick_labels import label_ticks
 from fpt.pipeline import load_merged
 from fpt.report.chart_equity import decompose_equity_time
 
@@ -237,6 +241,57 @@ def _page_betfair_analysis(now: datetime):
     st.subheader("Planilha bruta (amostra)")
     st.dataframe(match_ticks.tail(50), use_container_width=True, hide_index=True)
 
+    st.divider()
+    st.subheader("Backtest Scalping — PRESSURE_STEAM")
+    st.caption("Simula entradas quando pressão SofaScore + steam de odd coincidem nos ticks")
+    if st.button("▶ Rodar backtest scalping", type="primary", key="scalp_bt"):
+        labeled = label_ticks(ticks)
+        bt = run_scalping_backtest(labeled)
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Trades", bt.trades)
+        c2.metric("Win rate", f"{bt.win_rate:.1f}%")
+        c3.metric("PnL total", f"{bt.total_pnl_pct * 100:.2f}%")
+        c4.metric("PnL médio/trade", f"{bt.avg_pnl_pct:.3f}%")
+        c5.metric("Max DD", f"{bt.max_drawdown_pct:.2f}%")
+        if bt.by_horizon:
+            st.markdown("**Por horizonte forward (ticks rotulados)**")
+            st.dataframe(pd.DataFrame(bt.by_horizon).T, use_container_width=True)
+        if bt.trade_log:
+            st.dataframe(pd.DataFrame(bt.trade_log).tail(30), use_container_width=True, hide_index=True)
+        elif bt.trades == 0:
+            st.warning(
+                "Nenhum sinal — ticks precisam de colunas `ss_pressure_*` (SofaScore ativo durante coleta)."
+            )
+
+    st.divider()
+    st.subheader("Relatórios de Receita (PDF)")
+    if st.button("📈 Gerar preview receita (pré-live / scalping / combinado)", key="rev_preview"):
+        from fpt.pipeline import load_merged
+        from fpt.report.revenue_evolution import build_all_revenue_reports
+        try:
+            hist = load_merged()
+            reports = build_all_revenue_reports(hist)
+            for key, rep in reports.items():
+                st.markdown(f"**{rep.title}**")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("ROI", f"{rep.stats.get('roi_pct', 0):+.2f}%")
+                m2.metric("Max DD", f"{rep.stats.get('max_drawdown_pct', 0):.2f} p.p.")
+                m3.metric("Seq. perdas", rep.stats.get("max_losing_streak", 0))
+                m4.metric("Trades", rep.stats.get("n_trades", 0))
+                if len(rep.equity.series) >= 2:
+                    eq_df = pd.DataFrame({"date": rep.equity.series.index, "equity_pct": rep.equity.series.values})
+                    decomp = decompose_equity_time(eq_df["date"].values, eq_df["equity_pct"].values)
+                    fig = make_subplots(rows=3, cols=1, subplot_titles=("Evolução", "Tendência", "Ciclo"))
+                    fig.add_trace(go.Scatter(x=eq_df["date"], y=eq_df["equity_pct"], name="Equity"), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=eq_df["date"], y=decomp["trend"], name="Tendência"), row=2, col=1)
+                    fig.add_trace(go.Scatter(x=eq_df["date"], y=decomp["cycle"], name="Ciclo"), row=3, col=1)
+                    fig.update_layout(height=500, showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+                if rep.note:
+                    st.caption(rep.note)
+        except Exception as ex:
+            st.error(f"Erro ao gerar preview: {ex}")
+
 
 def _page_model_backtest(bankroll: float):
     st.header("Modelo ML & Backtest Holdout")
@@ -402,12 +457,21 @@ def _page_monitor(cfg, auto, refresh_sec, filter_status, filter_league, only_ale
 
     all_alerts = [a for s in states for a in s.alerts]
     exec_cfg = load_live_config().get("execution", {})
+    scalp_cfg = load_live_config().get("scalping", {})
     executor = BetfairExecutor()
+    scalper = ScalpingEngine()
 
     if all_alerts:
         st.subheader("🔔 Alertas")
         for a in all_alerts[:15]:
-            icon = "🟢" if a.alert_type == "ENTER" else ("🟠" if a.alert_type == "WATCH" else "🔵")
+            icon_map = {
+                "ENTER": "🟢", "WATCH": "🟠", "HT_EXIT": "🔵",
+                "PRESSURE_STEAM": "⚡", "SCALP_PRESSURE_STEAM": "⚡",
+                "SCALP_STEAM_MOMENTUM": "💨", "SCALP_PRESSURE_SURGE": "📈",
+                "SCALP_XG_SPIKE": "🎯", "SCALP_DOMINANCE": "👑", "SCALP_FADE_STEAM": "↩️",
+                "SCALP_EXIT": "🏁", "STEAM": "💨",
+            }
+            icon = icon_map.get(a.alert_type, "🔵")
             st.markdown(f"{icon} **{a.alert_type}** — {a.home} x {a.away}: {a.message}")
 
         if executor.enabled or exec_cfg.get("paper_mode", True):
@@ -415,28 +479,49 @@ def _page_monitor(cfg, auto, refresh_sec, filter_status, filter_league, only_ale
                 f"Execução: {'PAPER' if executor.paper_mode else 'REAL'} | "
                 f"{'automática' if exec_cfg.get('auto_execute') else 'aprovação manual'}"
             )
+            exec_types = ("ENTER", "HT_EXIT", "SCALP_EXIT") + tuple(
+                t for t in (
+                    "PRESSURE_STEAM", "SCALP_PRESSURE_STEAM", "SCALP_STEAM_MOMENTUM",
+                    "SCALP_PRESSURE_SURGE", "SCALP_XG_SPIKE", "SCALP_DOMINANCE", "SCALP_FADE_STEAM",
+                )
+            )
             for a in all_alerts:
-                if a.alert_type not in ("ENTER", "HT_EXIT"):
+                if a.alert_type not in exec_types and not is_scalp_entry(a.alert_type):
                     continue
                 side = a.recommended_side or ("LAY" if a.alert_type == "HT_EXIT" else "BACK")
                 stake = a.stake_back_pct if side == "BACK" else a.stake_lay_pct
                 if stake <= 0:
                     continue
+                scalp_alert = is_scalp_entry(a.alert_type)
+                plan = build_scalp_plan(a, side) if scalp_alert else None
                 cols = st.columns([3, 1, 1])
+                extra = ""
+                if plan:
+                    extra = f" | TP {plan.target_odd:.2f} SL {plan.stop_odd:.2f} t={plan.timeout_sec}s"
                 cols[0].markdown(
                     f"**{a.home} x {a.away}** — {side} @ "
-                    f"{a.odd_back if side == 'BACK' else a.odd_lay:.2f} | stake **{stake:.2%}**"
+                    f"{a.odd_back if side == 'BACK' else a.odd_lay:.2f} | stake **{stake:.2%}**{extra}"
                 )
-                if exec_cfg.get("auto_execute") and a.alert_type == "ENTER":
+                auto_scalp = scalp_alert and scalp_cfg.get("auto_execute_scalp", False)
+                if (exec_cfg.get("auto_execute") and a.alert_type == "ENTER") or auto_scalp:
                     res = executor.execute_alert(a, side=side, bankroll=bankroll, approved=True)
+                    if scalp_alert and res.get("status") in ("PAPER", "PLACED"):
+                        scalper.open_from_alert(a)
                     cols[1].success(res.get("status", "OK"))
                 else:
                     if cols[1].button(f"✅ Executar {side}", key=f"exec_{a.alert_id}"):
                         res = executor.execute_alert(a, side=side, bankroll=bankroll, approved=True)
+                        if scalp_alert and res.get("status") in ("PAPER", "PLACED"):
+                            scalper.open_from_alert(a)
                         if res.get("status") in ("PLACED", "PAPER"):
                             st.success(res.get("message", "Ordem enviada"))
                         else:
                             st.error(res.get("message", "Falha"))
+
+        open_pos = scalper.open_positions
+        if open_pos:
+            with st.expander(f"Posições scalp abertas ({len(open_pos)})"):
+                st.dataframe(pd.DataFrame([p.to_dict() for p in open_pos]), use_container_width=True, hide_index=True)
 
         recent = load_recent_executions(5)
         if recent:
@@ -462,6 +547,12 @@ def _page_monitor(cfg, auto, refresh_sec, filter_status, filter_league, only_ale
                 "¼ Kelly": f"{s.kelly_quarter:.2%}" if s.kelly_quarter else "—",
                 "Stake B%": f"{s.stake_back_pct:.2%}" if s.stake_back_pct else "—",
                 "Stake L%": f"{s.stake_lay_pct:.2%}" if s.stake_lay_pct else "—",
+                "Pressão H/A": (
+                    f"{s.pressure_home:.0f}/{s.pressure_away:.0f}"
+                    if s.pressure_home is not None and s.pressure_away is not None
+                    else "—"
+                ),
+                "Momentum": f"{s.graph_momentum:+.0f}" if s.graph_momentum is not None else "—",
                 "Ação": s.best_action,
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)

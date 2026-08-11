@@ -8,6 +8,7 @@ from ..models.predict import get_predictor, ModelPrediction
 from ..calendar import list_market_odds
 from .config import load_config
 from .fair_odds import exchange_fair_odds, fair_odd, min_entry_odd
+from .exchange_odds import ExchangeQuote, check_exchange_value
 from .ht_trading import estimate_ht_trade
 from .kelly import explain_zero_stake, kelly_ht_trade, compute_back_lay_stakes, apply_pro_tempo_stake_policy
 from .market_probs import p_ht_profit_proxy, probability_for_market
@@ -75,8 +76,21 @@ def build_recommendation(
     phi = pred.phi_dynamic
     ex = exchange_fair_odds(p, phi)
     fo, mo = ex.back_fair, ex.back_min
-    m_odd = market_odds.get(market) if market_odds else None
-    implied = (1 / m_odd) if m_odd and m_odd > 1.01 else None
+
+    side_key = {"home_win_ft": "home", "draw_ft": "draw", "away_win_ft": "away"}.get(market, "home")
+    ex_side = market_odds.get_exchange(side_key) if market_odds else None
+    quote = ExchangeQuote.from_prices(
+        ex_side.back if ex_side else None,
+        ex_side.lay if ex_side else None,
+    ) if ex_side else ExchangeQuote.from_prices(
+        market_odds.get(market) if market_odds else None,
+        market_odds.get_lay(market) if market_odds else None,
+    )
+
+    m_odd = quote.back or (market_odds.get(market) if market_odds else None)
+    implied = quote.implied_mid if quote.implied_mid else (
+        (1 / m_odd) if m_odd and m_odd > 1.01 else None
+    )
     edge = round((p - implied) * 100, 2) if implied else None
 
     entry_odd = mo if (reference_mode or ignore_odds) else (m_odd or mo)
@@ -117,9 +131,27 @@ def build_recommendation(
     reasons = []
     action = "INFO" if reference_mode else "ENTER"
     if not reference_mode:
-        has_value = m_odd is None or m_odd >= mo
+        back_val = check_exchange_value(p, phi, quote, "BACK")
+        lay_val = check_exchange_value(p, phi, quote, "LAY")
+        has_value = False
+        if allow_back and back_val.has_value:
+            has_value = True
+        if allow_lay and lay_val.has_value:
+            has_value = True
+        if m_odd is None and not quote.back and not quote.lay:
+            has_value = has_stake
+        elif not allow_back and not allow_lay:
+            has_value = False
+        elif allow_back and not allow_lay:
+            has_value = back_val.has_value
+        elif allow_lay and not allow_back:
+            has_value = lay_val.has_value
         if not has_value and not ignore_odds:
-            reasons.append(f"odd {m_odd:.2f} < mínima {mo:.2f}")
+            ref = quote.back or m_odd
+            if ref:
+                reasons.append(f"sem valor exchange (back {quote.back} lay {quote.lay}, mín {mo:.2f})")
+            else:
+                reasons.append("odd de mercado indisponível")
             action = "SKIP"
         if pred.confidence < min_conf:
             reasons.append(f"confiança {pred.confidence:.0f} < {min_conf}")

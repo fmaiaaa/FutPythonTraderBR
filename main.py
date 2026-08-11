@@ -17,6 +17,7 @@ from fpt.pipeline import run_daily_operation, load_merged
 from fpt.operation import league_summary, analyze_matchup
 from fpt.trading.engine import build_recommendation, scan_day, format_report
 from fpt.models.train import train_models
+from fpt.models.hierarchical import train_hierarchical_models
 from fpt.trading.market_sim import SimulatedMarket
 from fpt.trading.backtest import run_backtest, optimize_phi
 from fpt.trading.config import load_config
@@ -52,6 +53,11 @@ TRADING (pré-jogo → saída HT, ML + ¼ Kelly, φ dinâmico):
   betfair login|esportes|odds <mand> <vis>   API Betfair BR (certificado)
 
   live [scan]          Monitor in-time (CLI scan ou abre painel Streamlit)
+  collect-live         Coleta minuto a minuto (odds + SofaScore)
+  robo                 App autônomo (Streamlit + atalho área de trabalho)
+  finalize-collection  Dataset + treino scalping + upload Drive
+  scalping-backtest    Backtest rule-based PRESSURE_STEAM sobre ticks
+  sofascore-probe      Testa API SofaScore (requer curl_cffi)
   dashboard            Painel Streamlit (analise manual)
 
 Configure .env: FPT_API_KEY=...  (futpythontrader.com.br/dashboard)
@@ -170,11 +176,23 @@ def cmd_scan(args):
 
 
 def cmd_treinar(_):
-    df = load_merged()
-    meta = train_models(df)
-    print("\nTreino concluido (ensemble RF + HistGBM + GBM):")
+    from fpt.models.config import load_model_config
+
+    cfg = load_model_config()
+    prefer = "global" if cfg.get("hierarchical", {}).get("enabled", True) else "auto"
+    try:
+        df = load_merged(prefer=prefer)
+    except FileNotFoundError:
+        df = load_merged(prefer="auto")
+    if cfg.get("hierarchical", {}).get("enabled", True):
+        meta = train_hierarchical_models(df)
+        print("\nTreino hierárquico concluído (global + ligas):")
+        print(f"  ligas treinadas: {len(meta.get('leagues', {}))}")
+    else:
+        meta = train_models(df)
+        print("\nTreino concluído (ensemble RF + HistGBM + GBM):")
     for k, v in meta.items():
-        if k not in ("feature_names", "selected_features_sample"):
+        if k not in ("feature_names", "selected_features_sample", "leagues", "global"):
             print(f"  {k}: {v}")
 
 
@@ -287,6 +305,67 @@ def cmd_betfair(args):
     print("Subcomandos: login | esportes | odds <mand> <vis>")
 
 
+def cmd_collect_live(args):
+    import subprocess
+    minutes = int(args[0]) if args else 300
+    interval = int(args[1]) if len(args) > 1 else 60
+    subprocess.run([
+        sys.executable, "scripts/run_live_collector.py",
+        "--minutes", str(minutes), "--interval", str(interval),
+    ], check=False)
+
+
+def cmd_finalize_collection(args):
+    import subprocess
+    cmd = [sys.executable, "scripts/finalize_weekly_collection.py"]
+    if args and args[0] == "--upload-drive":
+        cmd.append("--upload-drive")
+    subprocess.run(cmd, check=False)
+
+
+def cmd_robo(_):
+    import subprocess
+    app = Path(__file__).parent / "autonomous_app.py"
+    print("Abrindo FPT Robo — http://localhost:8501")
+    print(f"Dados: defina FPT_DATA_ROOT ou use D:\\FutPythonTraderBR\\data")
+    subprocess.run([
+        sys.executable, "-m", "streamlit", "run", str(app),
+        "--server.headless", "true",
+    ])
+
+
+def cmd_scalping_backtest(args):
+    from fpt.live.betfair_logger import load_ticks
+    from fpt.live.scalping_backtest import run_scalping_backtest
+    from fpt.live.tick_labels import label_ticks
+
+    ticks = load_ticks()
+    if ticks.empty:
+        print("Sem ticks em data/betfair/ticks/ — rode o monitor live durante jogos.")
+        return
+    labeled = label_ticks(ticks)
+    out_path = Path("data/betfair/labeled_ticks.csv")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    labeled.to_csv(out_path, index=False, encoding="utf-8-sig")
+    print(f"Ticks rotulados: {out_path} ({len(labeled)} linhas)")
+
+    bt = run_scalping_backtest(labeled)
+    print(f"\n=== SCALPING BACKTEST — PRESSURE_STEAM ===")
+    print(f"Trades: {bt.trades} | Win rate: {bt.win_rate:.1f}%")
+    print(f"PnL total: {bt.total_pnl_pct * 100:.2f}% | Médio/trade: {bt.avg_pnl_pct:.3f}%")
+    print(f"Max drawdown: {bt.max_drawdown_pct:.2f}% | Timeouts: {bt.timeouts}")
+    if bt.by_horizon:
+        print("\nPor horizonte:")
+        for h, stats in bt.by_horizon.items():
+            print(f"  +{h}s: sinais={stats['signals']} avg_pnl={stats['avg_pnl_pct']:.3f}% win={stats['win_rate']:.1f}%")
+
+
+def cmd_sofascore_probe(args):
+    import subprocess
+    script = Path(__file__).parent / "scripts" / "sofascore_probe.py"
+    subprocess.run([sys.executable, str(script)] + args)
+
+
 def cmd_dashboard(_):
     import subprocess
     app = Path(__file__).parent / "dashboard.py"
@@ -350,6 +429,11 @@ COMMANDS = {
     "otimizar-phi": cmd_otimizar_phi,
     "betfair": cmd_betfair,
     "live": cmd_live,
+    "collect-live": cmd_collect_live,
+    "finalize-collection": cmd_finalize_collection,
+    "robo": cmd_robo,
+    "scalping-backtest": cmd_scalping_backtest,
+    "sofascore-probe": cmd_sofascore_probe,
     "dashboard": cmd_dashboard,
     "help": lambda _: help_text(),
 }

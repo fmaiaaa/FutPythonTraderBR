@@ -110,9 +110,9 @@ class SimulatedMarket(MarketProvider):
 
     def odds_from_row(self, row: pd.Series) -> MarketOdds:
         return MarketOdds(
-            home=_f(row.get("Odd_1_FT")),
-            draw=_f(row.get("Odd_X_FT")),
-            away=_f(row.get("Odd_2_FT")),
+            home=_f(row.get("Odd_1_FT") or row.get("Odd_H_FT")),
+            draw=_f(row.get("Odd_X_FT") or row.get("Odd_D_FT")),
+            away=_f(row.get("Odd_2_FT") or row.get("Odd_A_FT")),
             source="fpt_row",
         )
 

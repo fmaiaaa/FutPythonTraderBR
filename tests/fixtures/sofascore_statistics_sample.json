@@ -1,0 +1,21 @@
+{
+  "statistics": [
+    {
+      "period": "ALL",
+      "groups": [
+        {
+          "groupName": "Match overview",
+          "statisticsItems": [
+            {"name": "Ball possession", "home": "55%", "away": "45%"},
+            {"name": "Total shots", "home": "12", "away": "8"},
+            {"name": "Shots on target", "home": "5", "away": "3"},
+            {"name": "Expected goals", "home": "1.42", "away": "0.88"},
+            {"name": "Corner kicks", "home": "6", "away": "2"},
+            {"name": "Big chances", "home": "2", "away": "1"},
+            {"name": "Shots inside box", "home": "7", "away": "4"}
+          ]
+        }
+      ]
+    }
+  ]
+}

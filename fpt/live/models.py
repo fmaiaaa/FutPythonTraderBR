@@ -8,7 +8,7 @@ from typing import Any
 @dataclass
 class LiveAlert:
     alert_id: str
-    alert_type: str  # ENTER | WATCH | HT_EXIT | STEAM
+    alert_type: str  # ENTER | WATCH | HT_EXIT | STEAM | PRESSURE_STEAM | SCALP_EXIT
     severity: str    # high | medium | low
     home: str
     away: str
@@ -88,6 +88,11 @@ class LiveMatchState:
     kelly_quarter: float = 0.0
     stake_back_pct: float = 0.0
     stake_lay_pct: float = 0.0
+    sofascore_event_id: int | None = None
+    sofascore_stats: dict[str, Any] = field(default_factory=dict)
+    pressure_home: float | None = None
+    pressure_away: float | None = None
+    graph_momentum: float | None = None
 
     @property
     def score_display(self) -> str:
@@ -104,9 +109,13 @@ class LiveMatchState:
             "kickoff": self.kickoff,
             "status": self.status,
             "score": self.score_display,
+            "score_home": self.score_home,
+            "score_away": self.score_away,
             "elapsed_min": self.elapsed_min,
             "in_play": self.in_play,
             "market_id": self.market_id,
+            "event_id": self.event_id,
+            "total_matched": self.total_matched,
             "odds_source": self.odds_source,
             "odds_updated_at": self.odds_updated_at,
             "prob_home": self.prob_home,
@@ -121,4 +130,9 @@ class LiveMatchState:
             "kelly_quarter": self.kelly_quarter,
             "stake_back_pct": self.stake_back_pct,
             "stake_lay_pct": self.stake_lay_pct,
+            "sofascore_event_id": self.sofascore_event_id,
+            "sofascore_stats": self.sofascore_stats,
+            "pressure_home": self.pressure_home,
+            "pressure_away": self.pressure_away,
+            "graph_momentum": self.graph_momentum,
         }

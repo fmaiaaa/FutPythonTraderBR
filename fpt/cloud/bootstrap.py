@@ -9,12 +9,12 @@ from pathlib import Path
 import requests
 
 from ..client import DATA, ROOT, load_api_key
-from ..integrations.google_drive import (
-    MERGED_ZIP_NAME,
-    MODELS_ZIP_NAME,
-    download_drive_zip,
-    find_drive_asset,
-)
+    from ..integrations.google_drive import (
+        MERGED_ZIP_NAME,
+        MODELS_ZIP_NAME,
+        download_drive_zip,
+        find_drive_asset,
+    )
 
 CERT_DIR = ROOT / "certs"
 MODEL_DIR = DATA / "models"
@@ -252,6 +252,16 @@ def ensure_data_and_models(progress=None) -> tuple[bool, str]:
 def cloud_bootstrap() -> None:
     """Entry point: secrets + dados. Chamar antes do live_app."""
     apply_streamlit_secrets()
+
+    if _drive_oauth_configured():
+        try:
+            from ..integrations.google_drive import download_live_snapshot_from_drive
+            from ..live.monitor import load_latest_snapshot
+
+            if not load_latest_snapshot():
+                download_live_snapshot_from_drive()
+        except Exception:
+            pass
 
     try:
         import streamlit as st

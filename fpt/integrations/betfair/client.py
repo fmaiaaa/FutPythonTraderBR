@@ -20,6 +20,7 @@ from ...client import ENV_PATH
 # URLs Betfair Brasil (pós-regulamentação)
 LOGIN_URL = "https://identitysso-cert.betfair.bet.br/api/certlogin"
 API_URL = "https://api.betfair.bet.br/exchange/betting/json-rpc/v1"
+ACCOUNT_URL = "https://api.betfair.bet.br/exchange/account/json-rpc/v1"
 
 _client: "BetfairClient | None" = None
 
@@ -108,6 +109,21 @@ class BetfairClient:
 
     def call(self, method: str, params: dict, req_id: int = 1) -> dict:
         """Chamada JSON-RPC Sports API."""
+        return self._rpc(API_URL, method, params, req_id)
+
+    def account_call(self, method: str, params: dict | None = None, req_id: int = 1) -> dict:
+        """Chamada JSON-RPC Account API."""
+        return self._rpc(ACCOUNT_URL, method, params or {}, req_id)
+
+    def _session_expired(self, err: object) -> bool:
+        msg = str(err)
+        return (
+            "INVALID_SESSION_INFORMATION" in msg
+            or "AANGX-0002" in msg
+            or "NO_SESSION" in msg
+        )
+
+    def _rpc(self, url: str, method: str, params: dict, req_id: int = 1, *, _retried: bool = False) -> dict:
         token = self.login()
         body = json.dumps({
             "jsonrpc": "2.0",
@@ -120,15 +136,37 @@ class BetfairClient:
             "X-Authentication": token,
             "Content-Type": "application/json",
         }
-        req = urllib.request.Request(API_URL, body.encode("utf-8"), headers)
+        req = urllib.request.Request(url, body.encode("utf-8"), headers)
         try:
             with urllib.request.urlopen(req, timeout=60) as response:
                 raw = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as ex:
-            raise RuntimeError(f"Betfair API HTTP {ex.code}: {ex.read().decode('utf-8', errors='replace')[:300]}") from ex
+            err_body = ex.read().decode("utf-8", errors="replace")[:300]
+            if not _retried and ex.code in (401, 403) and self._session_expired(err_body):
+                self._session_token = None
+                self.login(force=True)
+                return self._rpc(url, method, params, req_id, _retried=True)
+            raise RuntimeError(f"Betfair API HTTP {ex.code}: {err_body}") from ex
         if "error" in raw:
-            raise RuntimeError(f"Betfair API error: {raw['error']}")
+            err = raw["error"]
+            if not _retried and self._session_expired(err):
+                self._session_token = None
+                self.login(force=True)
+                return self._rpc(url, method, params, req_id, _retried=True)
+            raise RuntimeError(f"Betfair API error: {err}")
         return raw.get("result", raw)
+
+    def get_account_funds(self) -> dict:
+        """Saldo disponível para apostar."""
+        return self.account_call("AccountAPING/v1.0/getAccountFunds", {})
+
+    def available_balance(self) -> float:
+        funds = self.get_account_funds()
+        for key in ("availableToBetBalance", "availableToBet", "balance"):
+            val = funds.get(key)
+            if val is not None:
+                return float(val)
+        return 0.0
 
     # --- Helpers ---
 
@@ -186,6 +224,18 @@ class BetfairClient:
         if not market_ids:
             return []
         return self.call("SportsAPING/v1.0/listScores", {"marketIds": market_ids})
+
+    def list_scores_optional(self, market_ids: list[str]) -> list[dict]:
+        """Placar live — indisponível na Betfair BR regulamentada (DSC-0021)."""
+        if not market_ids:
+            return []
+        try:
+            return self.list_scores(market_ids)
+        except Exception as ex:
+            msg = str(ex)
+            if "DSC-0021" in msg or "-32601" in msg:
+                return []
+            raise
 
     @staticmethod
     def best_back_lay(runner: dict) -> tuple[float | None, float | None, float | None, float | None]:
@@ -286,8 +336,17 @@ class BetfairClient:
             },
         }
 
-    def fetch_match_odds_batch(self, event_ids: list[str]) -> list[dict]:
-        """Match Odds + book + placar para vários eventos."""
+    def fetch_match_odds_batch(self, event_ids: list[str], *, chunk_size: int = 25) -> list[dict]:
+        """Match Odds + book + placar para vários eventos (em lotes)."""
+        if not event_ids:
+            return []
+        out: list[dict] = []
+        step = max(1, int(chunk_size))
+        for i in range(0, len(event_ids), step):
+            out.extend(self._fetch_match_odds_batch_chunk(event_ids[i : i + step]))
+        return out
+
+    def _fetch_match_odds_batch_chunk(self, event_ids: list[str]) -> list[dict]:
         if not event_ids:
             return []
         cats = self.list_market_catalogue(event_ids, "MATCH_ODDS", max(len(event_ids) * 2, 10))
@@ -295,7 +354,7 @@ class BetfairClient:
             return []
         market_ids = [c["marketId"] for c in cats]
         books = {b["marketId"]: b for b in self.list_market_book(market_ids)}
-        scores = {s["marketId"]: s for s in self.list_scores(market_ids)}
+        scores = {s["marketId"]: s for s in self.list_scores_optional(market_ids)}
         out = []
         for cat in cats:
             mid = cat["marketId"]
@@ -319,7 +378,7 @@ class BetfairClient:
                 market_id = cats[0]["marketId"]
                 books = self.list_market_book([market_id])
                 if books:
-                    scores = self.list_scores([market_id])
+                    scores = self.list_scores_optional([market_id])
                     sc = scores[0] if scores else None
                     return {
                         "catalogue": cats[0],

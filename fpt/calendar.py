@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 
 from .client import DATA
+from .dates import apply_fetch_date, parse_fpt_date_series
 from .downloader import fetch_jogos_do_dia
 from .features.schedule import build_team_calendar, schedule_context
 from .markets import JOGOS_DIA_MARKETS
@@ -57,14 +58,19 @@ def normalize_jogos(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     out = df.copy()
-    out["Date"] = pd.to_datetime(out["Date"], dayfirst=True, errors="coerce")
+    out["Date"] = apply_fetch_date(out)
     rename = {
         "Odd_H_FT": "Odd_1_FT", "Odd_D_FT": "Odd_X_FT", "Odd_A_FT": "Odd_2_FT",
         "Odd_H_HT": "Odd_1_HT", "Odd_D_HT": "Odd_X_HT", "Odd_A_HT": "Odd_2_HT",
     }
     for old, new in rename.items():
-        if old in out.columns and new not in out.columns:
+        if old not in out.columns:
+            continue
+        if new not in out.columns:
             out[new] = out[old]
+        else:
+            # CSVs mistos: um dia só Odd_H_FT, outro já traz Odd_1_FT parcial — combinar.
+            out[new] = out[new].fillna(out[old])
     out["is_brazil"] = out["League"].astype(str).str.contains(
         r"brazil|brasil|serie a|serie b|serie c|serie d|copa do brasil",
         case=False, na=False,

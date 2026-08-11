@@ -11,20 +11,49 @@ from .operation import analyze_matchup, filter_brazil_today, league_summary
 from .leagues import BRAZIL_MALE_LEAGUES
 
 
-def load_merged() -> pd.DataFrame:
-    for p in (
-        DATA / "merged" / "brazil_male_all.parquet",
+def load_merged(prefer: str = "auto") -> pd.DataFrame:
+    """
+    prefer:
+      auto — global_all se existir, senão brazil_male_all
+      global — só global_all
+      brazil — só brazil_male_all
+    """
+    global_paths = (
         DATA / "merged" / "global_all.parquet",
-    ):
-        if p.exists():
-            return pd.read_parquet(p)
-    for csv in (
-        DATA / "merged" / "brazil_male_all.csv",
         DATA / "merged" / "global_all.csv",
-    ):
-        if csv.exists():
-            return pd.read_csv(csv, low_memory=False)
-    raise FileNotFoundError("Dataset não encontrado. Rode: python main.py download-all")
+    )
+    brazil_paths = (
+        DATA / "merged" / "brazil_male_all.parquet",
+        DATA / "merged" / "brazil_male_all.csv",
+    )
+
+    def _read(paths):
+        for p in paths:
+            if p.exists():
+                if p.suffix == ".parquet":
+                    return pd.read_parquet(p)
+                return pd.read_csv(p, low_memory=False)
+        return None
+
+    if prefer == "brazil":
+        df = _read(brazil_paths)
+        if df is not None:
+            return df
+        raise FileNotFoundError("Dataset BR não encontrado. Rode: python main.py download-all")
+
+    if prefer == "global":
+        df = _read(global_paths)
+        if df is not None:
+            return df
+        raise FileNotFoundError("Dataset global não encontrado. Rode: python main.py download-global")
+
+    df = _read(global_paths)
+    if df is not None:
+        return df
+    df = _read(brazil_paths)
+    if df is not None:
+        return df
+    raise FileNotFoundError("Dataset não encontrado. Rode: python main.py download-global")
 
 
 def run_daily_operation(day: str | None = None) -> dict:

@@ -7,8 +7,11 @@ textColor = "#fafafa"
 
 [server]
 headless = true
-enableCORS = false
-enableXsrfProtection = true
+# App local (atalho desktop) — XSRF exige CORS=true; desligamos XSRF para localhost
+enableCORS = true
+enableXsrfProtection = false
+port = 8501
+address = "127.0.0.1"
 
 [browser]
 gatherUsageStats = false
