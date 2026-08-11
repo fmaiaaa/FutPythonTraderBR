@@ -91,13 +91,7 @@ jobs:
             python -c "from fpt.downloader import merge_all; merge_all()" || true
           fi
           if [ ! -f data/models/model_outcome.joblib ]; then
-            python main.py treinar || python -c "
-from fpt.integrations.google_drive import find_drive_asset, download_drive_zip, MODELS_ZIP_NAME
-from pathlib import Path
-asset = find_drive_asset(MODELS_ZIP_NAME)
-if asset:
-    download_drive_zip(asset['file_id'], Path('data/models'))
-" || true
+            python main.py treinar || python scripts/download_models_from_drive.py || true
           fi
           python scripts/seed_robust_ranking.py
 
